@@ -1,0 +1,312 @@
+---
+title: 'Authentication'
+description: 'Learn about API authentication and security considerations'
+icon: 'shield-halved'
+---
+
+## Current Authentication Status
+
+<Warning>
+  **No Authentication Required**: The Iris API currently operates without authentication. All endpoints are publicly accessible without API keys, tokens, or other credentials.
+</Warning>
+
+This open design prioritizes simplicity and ease of integration during development and testing phases. However, it comes with important security implications for production deployments.
+
+## Open API Design
+
+The current implementation allows unrestricted access to all endpoints:
+
+```bash
+curl -X POST http://localhost:8080/compare \
+  -H "Content-Type: application/json" \
+  -d '{"target_url": "...", "people": [...]}'
+```
+
+No headers, tokens, or credentials are required to make requests.
+
+### Benefits of Open Access
+
+<CardGroup cols={2}>
+  <Card title="Rapid Integration" icon="rocket">
+    Start using the API immediately without authentication setup or key management.
+  </Card>
+  <Card title="Simplified Testing" icon="vial">
+    Test endpoints freely during development without token rotation or authentication flows.
+  </Card>
+  <Card title="Low Barrier to Entry" icon="door-open">
+    Minimal configuration required for proof-of-concept implementations.
+  </Card>
+  <Card title="No Key Management" icon="key">
+    Avoid the complexity of storing, rotating, or securing API keys.
+  </Card>
+</CardGroup>
+
+## Security Considerations
+
+<Warning>
+  The absence of authentication means **anyone** who can reach your API endpoint can:
+  - Submit face comparison requests
+  - Consume computational resources
+  - Access the `/stats` endpoint to view usage metrics
+  - Potentially abuse the service
+</Warning>
+
+### Current Protection Mechanisms
+
+While authentication is absent, the API includes basic protection:
+
+#### Rate Limiting (IP-Based)
+
+The API implements rate limiting based on client IP addresses:
+
+- **Rate**: 5 requests per second per IP
+- **Burst**: Up to 10 requests in a burst
+- **Scope**: Applied to all endpoints (including `/compare`, `/stats`, and `/health`)
+- **Response**: HTTP 429 (Too Many Requests) when exceeded
+
+```rust
+// From main.rs:127-129
+let quota = Quota::per_second(NonZeroU32::new(5).unwrap())
+    .allow_burst(NonZeroU32::new(10).unwrap());
+```
+
+<Note>
+  Rate limiting provides basic abuse prevention but is **not a substitute** for proper authentication in production environments.
+</Note>
+
+#### CORS Configuration
+
+The API allows cross-origin requests from any origin:
+
+```rust
+// From main.rs:138-141
+let cors = CorsLayer::new()
+    .allow_origin(Any)
+    .allow_methods([Method::POST, Method::GET])
+    .allow_headers([header::CONTENT_TYPE]);
+```
+
+This permissive CORS policy enables browser-based integrations but increases the attack surface.
+
+## Production Recommendations
+
+<Warning>
+  **Do NOT deploy this API to production without implementing authentication.** The open design is suitable only for:
+  - Local development environments
+  - Internal networks with strict access controls
+  - Proof-of-concept demonstrations
+  - Testing and evaluation
+</Warning>
+
+### Recommended Authentication Methods
+
+For production deployments, implement one of these authentication strategies:
+
+<AccordionGroup>
+  <Accordion title="API Key Authentication" icon="key">
+    **Best for**: Service-to-service communication, internal tools
+
+    - Generate unique API keys for each client
+    - Validate keys in middleware before request processing
+    - Include keys in `Authorization` or custom headers
+    - Implement key rotation policies
+
+    ```rust
+    // Example middleware implementation
+    async fn auth_middleware(
+        headers: HeaderMap,
+        request: Request,
+        next: Next,
+    ) -> Response {
+        if let Some(key) = headers.get("X-API-Key") {
+            if validate_api_key(key) {
+                return next.run(request).await;
+            }
+        }
+        StatusCode::UNAUTHORIZED.into_response()
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="OAuth 2.0 / JWT" icon="lock">
+    **Best for**: User-facing applications, third-party integrations
+
+    - Implement JWT token validation
+    - Support standard OAuth 2.0 flows
+    - Enable fine-grained permissions and scopes
+    - Integrate with identity providers (Auth0, Keycloak, etc.)
+
+    ```rust
+    use jsonwebtoken::{decode, Validation};
+
+    async fn jwt_middleware(
+        headers: HeaderMap,
+        request: Request,
+        next: Next,
+    ) -> Response {
+        if let Some(auth) = headers.get("Authorization") {
+            if let Ok(token) = extract_bearer_token(auth) {
+                if let Ok(claims) = decode::<Claims>(&token, &key, &Validation::default()) {
+                    return next.run(request).await;
+                }
+            }
+        }
+        StatusCode::UNAUTHORIZED.into_response()
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="mTLS (Mutual TLS)" icon="certificate">
+    **Best for**: High-security environments, zero-trust architectures
+
+    - Require client certificates for all connections
+    - Validate certificates at the TLS layer
+    - Strongest security but more complex setup
+    - Ideal for microservice mesh deployments
+  </Accordion>
+
+  <Accordion title="Reverse Proxy Authentication" icon="server">
+    **Best for**: Existing infrastructure with auth layers
+
+    - Deploy API behind nginx, Caddy, or similar
+    - Implement authentication at proxy layer
+    - Forward authenticated requests to Iris API
+    - Leverage existing auth infrastructure
+
+    ```nginx
+    # Example nginx configuration
+    location /api/ {
+        auth_request /auth;
+        proxy_pass http://iris-api:8080/;
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Additional Security Measures
+
+Beyond authentication, consider these hardening steps:
+
+<Steps>
+  <Step title="Enable HTTPS">
+    Use TLS certificates to encrypt all API traffic. Never transmit face data over unencrypted connections.
+  </Step>
+  
+  <Step title="Restrict CORS Origins">
+    Replace `allow_origin(Any)` with specific allowed origins:
+    ```rust
+    .allow_origin("https://yourdomain.com".parse::<HeaderValue>().unwrap())
+    ```
+  </Step>
+  
+  <Step title="Implement Request Logging">
+    Log all requests for audit trails and security monitoring.
+  </Step>
+  
+  <Step title="Add Input Validation">
+    Validate image URLs to prevent SSRF attacks and restrict allowed protocols.
+  </Step>
+  
+  <Step title="Use Network Segmentation">
+    Deploy the API in a private subnet, accessible only through authenticated gateways.
+  </Step>
+</Steps>
+
+## Network-Level Access Control
+
+If implementing application-level authentication is not immediately feasible, use network-level controls:
+
+### Firewall Rules
+
+```bash
+# Allow only specific IPs (example using iptables)
+sudo iptables -A INPUT -p tcp --dport 8080 -s 10.0.0.0/8 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 8080 -j DROP
+```
+
+### VPN/Private Network
+
+- Deploy API within a VPN
+- Require VPN connection for access
+- Use cloud provider's private networking (AWS VPC, Azure VNet)
+
+### Container Network Policies
+
+```yaml
+# Kubernetes NetworkPolicy example
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: iris-api-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: iris-api
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          role: api-gateway
+```
+
+## Migration Path
+
+When adding authentication to an existing deployment:
+
+<Steps>
+  <Step title="Add Auth Middleware">
+    Implement authentication middleware without enforcing it initially.
+  </Step>
+  
+  <Step title="Enable Soft Enforcement">
+    Log authentication failures but continue processing requests.
+  </Step>
+  
+  <Step title="Notify Clients">
+    Inform API consumers of the upcoming authentication requirement.
+  </Step>
+  
+  <Step title="Hard Enforcement">
+    Enable authentication enforcement and reject unauthenticated requests.
+  </Step>
+  
+  <Step title="Monitor & Adjust">
+    Monitor for authentication failures and assist clients with migration.
+  </Step>
+</Steps>
+
+## Frequently Asked Questions
+
+<AccordionGroup>
+  <Accordion title="Why doesn't the API include authentication by default?">
+    The API is designed as a lightweight, easy-to-deploy face recognition engine. Authentication adds complexity and varies significantly based on deployment context (microservices, standalone apps, etc.). This design allows developers to choose the authentication strategy that best fits their architecture.
+  </Accordion>
+
+  <Accordion title="Can I use the API in production without authentication?">
+    Only if deployed in a trusted, isolated network with strict access controls. For internet-facing or multi-tenant deployments, authentication is **essential**.
+  </Accordion>
+
+  <Accordion title="Does rate limiting protect against abuse?">
+    Rate limiting provides basic protection but is insufficient for production. Attackers can rotate IPs or use distributed systems to bypass IP-based rate limits.
+  </Accordion>
+
+  <Accordion title="What happens if I don't add authentication?">
+    Your API is vulnerable to:
+    - Unauthorized usage and resource consumption
+    - Data exfiltration through the comparison endpoint
+    - Denial of service attacks
+    - Compliance violations (GDPR, CCPA, etc.)
+    - Potential legal liability
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Error Handling" icon="triangle-exclamation" href="/api/error-handling">
+    Learn about error responses and troubleshooting
+  </Card>
+  <Card title="Integration Examples" icon="code" href="/api/examples">
+    See complete authentication implementation examples
+  </Card>
+</CardGroup>

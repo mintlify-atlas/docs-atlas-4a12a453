@@ -1,0 +1,1299 @@
+---
+title: 'Integration Examples'
+description: 'Real-world examples for integrating Iris face recognition into your applications'
+icon: 'code'
+---
+
+## Overview
+
+This guide provides production-ready integration examples for the Iris API across multiple programming languages and frameworks. All examples use the actual endpoint structure and handle common scenarios like rate limiting, errors, and asynchronous processing.
+
+<Note>
+  These examples assume the API is running at `http://localhost:8080`. Replace with your actual API URL for production deployments.
+</Note>
+
+## Quick Start Examples
+
+Get started quickly with these minimal examples:
+
+<CodeGroup>
+```bash cURL
+# Basic face comparison
+curl -X POST http://localhost:8080/compare \
+  -H "Content-Type: application/json" \
+  -d '{
+    "target_url": "https://example.com/photos/target.jpg",
+    "people": [
+      {
+        "name": "John Doe",
+        "image_url": "https://example.com/photos/john.jpg"
+      },
+      {
+        "name": "Jane Smith",
+        "image_url": "https://example.com/photos/jane.jpg"
+      }
+    ]
+  }'
+
+# Response:
+# {
+#   "matches": [
+#     {"name": "John Doe", "probability": 87.0},
+#     {"name": "Jane Smith", "probability": 42.0}
+#   ]
+# }
+```
+
+```javascript JavaScript (Fetch)
+const response = await fetch('http://localhost:8080/compare', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    target_url: 'https://example.com/photos/target.jpg',
+    people: [
+      {
+        name: 'John Doe',
+        image_url: 'https://example.com/photos/john.jpg'
+      },
+      {
+        name: 'Jane Smith',
+        image_url: 'https://example.com/photos/jane.jpg'
+      }
+    ]
+  })
+});
+
+const result = await response.json();
+console.log('Matches:', result.matches);
+// Matches: [
+//   { name: 'John Doe', probability: 87.0 },
+//   { name: 'Jane Smith', probability: 42.0 }
+// ]
+```
+
+```python Python (Requests)
+import requests
+
+response = requests.post(
+    'http://localhost:8080/compare',
+    json={
+        'target_url': 'https://example.com/photos/target.jpg',
+        'people': [
+            {
+                'name': 'John Doe',
+                'image_url': 'https://example.com/photos/john.jpg'
+            },
+            {
+                'name': 'Jane Smith',
+                'image_url': 'https://example.com/photos/jane.jpg'
+            }
+        ]
+    }
+)
+
+result = response.json()
+print(f"Matches: {result['matches']}")
+# Matches: [{'name': 'John Doe', 'probability': 87.0}, {'name': 'Jane Smith', 'probability': 42.0}]
+```
+
+```go Go
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+)
+
+type Person struct {
+	Name     string `json:"name"`
+	ImageURL string `json:"image_url"`
+}
+
+type CompareRequest struct {
+	TargetURL string   `json:"target_url"`
+	People    []Person `json:"people"`
+}
+
+type MatchResult struct {
+	Name        string  `json:"name"`
+	Probability float64 `json:"probability"`
+}
+
+type CompareResponse struct {
+	Matches []MatchResult `json:"matches"`
+}
+
+func main() {
+	req := CompareRequest{
+		TargetURL: "https://example.com/photos/target.jpg",
+		People: []Person{
+			{Name: "John Doe", ImageURL: "https://example.com/photos/john.jpg"},
+			{Name: "Jane Smith", ImageURL: "https://example.com/photos/jane.jpg"},
+		},
+	}
+
+	payload, _ := json.Marshal(req)
+	resp, _ := http.Post(
+		"http://localhost:8080/compare",
+		"application/json",
+		bytes.NewBuffer(payload),
+	)
+	defer resp.Body.Close()
+
+	var result CompareResponse
+	json.NewDecoder(resp.Body).Decode(&result)
+	fmt.Printf("Matches: %+v\n", result.Matches)
+}
+```
+</CodeGroup>
+
+## Production-Ready Client Libraries
+
+Robust client implementations with error handling, retries, and rate limiting:
+
+<Tabs>
+  <Tab title="JavaScript/TypeScript">
+    ### Full-Featured JavaScript Client
+
+    ```typescript
+    // iris-client.ts
+    export interface Person {
+      name: string;
+      image_url: string;
+    }
+
+    export interface MatchResult {
+      name: string;
+      probability: number;
+    }
+
+    export interface CompareResponse {
+      matches: MatchResult[];
+    }
+
+    export interface IrisClientOptions {
+      baseUrl: string;
+      maxRetries?: number;
+      retryDelay?: number;
+      timeout?: number;
+    }
+
+    export class IrisClient {
+      private baseUrl: string;
+      private maxRetries: number;
+      private retryDelay: number;
+      private timeout: number;
+
+      constructor(options: IrisClientOptions) {
+        this.baseUrl = options.baseUrl.replace(/\/$/, ''); // Remove trailing slash
+        this.maxRetries = options.maxRetries ?? 3;
+        this.retryDelay = options.retryDelay ?? 1000;
+        this.timeout = options.timeout ?? 30000;
+      }
+
+      /**
+       * Compare a target face against a list of known people
+       */
+      async compare(
+        targetUrl: string,
+        people: Person[],
+        retryCount = 0
+      ): Promise<CompareResponse> {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+        try {
+          const response = await fetch(`${this.baseUrl}/compare`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              target_url: targetUrl,
+              people: people
+            }),
+            signal: controller.signal
+          });
+
+          clearTimeout(timeoutId);
+
+          // Handle rate limiting with exponential backoff
+          if (response.status === 429) {
+            if (retryCount < this.maxRetries) {
+              const delay = this.retryDelay * Math.pow(2, retryCount);
+              console.warn(`Rate limited. Retrying in ${delay}ms... (${retryCount + 1}/${this.maxRetries})`);
+              await this.sleep(delay);
+              return this.compare(targetUrl, people, retryCount + 1);
+            }
+            throw new Error(`Rate limit exceeded after ${this.maxRetries} retries`);
+          }
+
+          // Handle server errors with retry
+          if (response.status === 500) {
+            if (retryCount < this.maxRetries) {
+              const delay = this.retryDelay * Math.pow(2, retryCount);
+              console.warn(`Server error. Retrying in ${delay}ms... (${retryCount + 1}/${this.maxRetries})`);
+              await this.sleep(delay);
+              return this.compare(targetUrl, people, retryCount + 1);
+            }
+            throw new Error(`Server error after ${this.maxRetries} retries`);
+          }
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+
+          return await response.json();
+        } catch (error) {
+          clearTimeout(timeoutId);
+          if (error instanceof Error && error.name === 'AbortError') {
+            throw new Error(`Request timeout after ${this.timeout}ms`);
+          }
+          throw error;
+        }
+      }
+
+      /**
+       * Get API statistics
+       */
+      async getStats(): Promise<{
+        total_requests: number;
+        requests_last_second: number;
+        requests_last_minute: number;
+        requests_last_hour: number;
+      }> {
+        const response = await fetch(`${this.baseUrl}/stats`);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch stats: ${response.statusText}`);
+        }
+        return await response.json();
+      }
+
+      /**
+       * Check API health
+       */
+      async healthCheck(): Promise<boolean> {
+        try {
+          const response = await fetch(`${this.baseUrl}/health`);
+          return response.ok && await response.text() === 'OK';
+        } catch {
+          return false;
+        }
+      }
+
+      /**
+       * Find the best match from results
+       */
+      getBestMatch(response: CompareResponse): MatchResult | null {
+        if (response.matches.length === 0) return null;
+        return response.matches[0]; // Already sorted by probability
+      }
+
+      /**
+       * Filter matches by minimum probability threshold
+       */
+      filterByThreshold(response: CompareResponse, minProbability: number): MatchResult[] {
+        return response.matches.filter(m => m.probability >= minProbability);
+      }
+
+      private sleep(ms: number): Promise<void> {
+        return new Promise(resolve => setTimeout(resolve, ms));
+      }
+    }
+
+    // Usage Example
+    async function main() {
+      const client = new IrisClient({
+        baseUrl: 'http://localhost:8080',
+        maxRetries: 3,
+        timeout: 30000
+      });
+
+      try {
+        // Check health first
+        const isHealthy = await client.healthCheck();
+        if (!isHealthy) {
+          console.error('API is not healthy');
+          return;
+        }
+
+        // Compare faces
+        const result = await client.compare(
+          'https://example.com/photos/event.jpg',
+          [
+            { name: 'Alice Johnson', image_url: 'https://example.com/photos/alice.jpg' },
+            { name: 'Bob Williams', image_url: 'https://example.com/photos/bob.jpg' },
+            { name: 'Carol Brown', image_url: 'https://example.com/photos/carol.jpg' }
+          ]
+        );
+
+        // Process results
+        const bestMatch = client.getBestMatch(result);
+        if (bestMatch && bestMatch.probability >= 70) {
+          console.log(`Best match: ${bestMatch.name} (${bestMatch.probability}% confidence)`);
+        } else {
+          console.log('No confident matches found');
+        }
+
+        // Show all high-confidence matches
+        const highConfidenceMatches = client.filterByThreshold(result, 60);
+        console.log(`High confidence matches: ${highConfidenceMatches.length}`);
+        highConfidenceMatches.forEach(match => {
+          console.log(`  - ${match.name}: ${match.probability}%`);
+        });
+
+        // Get stats
+        const stats = await client.getStats();
+        console.log('API Stats:', stats);
+      } catch (error) {
+        console.error('Error:', error);
+      }
+    }
+
+    main();
+    ```
+  </Tab>
+
+  <Tab title="Python">
+    ### Full-Featured Python Client
+
+    ```python
+    # iris_client.py
+    import time
+    import requests
+    from typing import List, Dict, Optional
+    from dataclasses import dataclass
+    from enum import Enum
+
+    @dataclass
+    class Person:
+        """Represents a person for face comparison"""
+        name: str
+        image_url: str
+
+        def to_dict(self) -> Dict:
+            return {"name": self.name, "image_url": self.image_url}
+
+    @dataclass
+    class MatchResult:
+        """Represents a face match result"""
+        name: str
+        probability: float
+
+        @classmethod
+        def from_dict(cls, data: Dict) -> 'MatchResult':
+            return cls(name=data["name"], probability=data["probability"])
+
+    @dataclass
+    class CompareResponse:
+        """Response from compare endpoint"""
+        matches: List[MatchResult]
+
+        @classmethod
+        def from_dict(cls, data: Dict) -> 'CompareResponse':
+            return cls(matches=[MatchResult.from_dict(m) for m in data["matches"]])
+
+    @dataclass
+    class StatsResponse:
+        """API usage statistics"""
+        total_requests: int
+        requests_last_second: int
+        requests_last_minute: int
+        requests_last_hour: int
+
+    class IrisClientError(Exception):
+        """Base exception for Iris client errors"""
+        pass
+
+    class RateLimitError(IrisClientError):
+        """Raised when rate limit is exceeded"""
+        pass
+
+    class IrisClient:
+        """Production-ready client for Iris Face Recognition API"""
+
+        def __init__(
+            self,
+            base_url: str,
+            max_retries: int = 3,
+            retry_delay: float = 1.0,
+            timeout: float = 30.0,
+            requests_per_second: float = 4.5
+        ):
+            """
+            Initialize Iris client
+
+            Args:
+                base_url: API base URL (e.g., http://localhost:8080)
+                max_retries: Maximum number of retry attempts
+                retry_delay: Base delay between retries in seconds
+                timeout: Request timeout in seconds
+                requests_per_second: Rate limit (stay under 5 req/s)
+            """
+            self.base_url = base_url.rstrip('/')
+            self.max_retries = max_retries
+            self.retry_delay = retry_delay
+            self.timeout = timeout
+            self.min_interval = 1.0 / requests_per_second
+            self.last_request_time = 0.0
+            self.session = requests.Session()
+            self.session.headers.update({'Content-Type': 'application/json'})
+
+        def _rate_limit(self):
+            """Ensure minimum interval between requests"""
+            elapsed = time.time() - self.last_request_time
+            if elapsed < self.min_interval:
+                time.sleep(self.min_interval - elapsed)
+            self.last_request_time = time.time()
+
+        def compare(
+            self,
+            target_url: str,
+            people: List[Person],
+            retry_count: int = 0
+        ) -> CompareResponse:
+            """
+            Compare target face against known people
+
+            Args:
+                target_url: URL or data URI of target image
+                people: List of Person objects to compare against
+                retry_count: Current retry attempt (internal use)
+
+            Returns:
+                CompareResponse with matches sorted by probability
+
+            Raises:
+                RateLimitError: Rate limit exceeded after all retries
+                IrisClientError: Other API errors
+            """
+            self._rate_limit()
+
+            payload = {
+                "target_url": target_url,
+                "people": [p.to_dict() for p in people]
+            }
+
+            try:
+                response = self.session.post(
+                    f"{self.base_url}/compare",
+                    json=payload,
+                    timeout=self.timeout
+                )
+
+                if response.status_code == 200:
+                    return CompareResponse.from_dict(response.json())
+
+                elif response.status_code == 429:
+                    if retry_count < self.max_retries:
+                        delay = self.retry_delay * (2 ** retry_count)
+                        print(f"Rate limited. Retrying in {delay}s... ({retry_count + 1}/{self.max_retries})")
+                        time.sleep(delay)
+                        return self.compare(target_url, people, retry_count + 1)
+                    raise RateLimitError(f"Rate limit exceeded after {self.max_retries} retries")
+
+                elif response.status_code == 500:
+                    if retry_count < self.max_retries:
+                        delay = self.retry_delay * (2 ** retry_count)
+                        print(f"Server error. Retrying in {delay}s... ({retry_count + 1}/{self.max_retries})")
+                        time.sleep(delay)
+                        return self.compare(target_url, people, retry_count + 1)
+                    raise IrisClientError(f"Server error after {self.max_retries} retries")
+
+                else:
+                    raise IrisClientError(f"HTTP {response.status_code}: {response.text}")
+
+            except requests.exceptions.Timeout:
+                raise IrisClientError(f"Request timeout after {self.timeout}s")
+            except requests.exceptions.RequestException as e:
+                raise IrisClientError(f"Request failed: {str(e)}")
+
+        def get_stats(self) -> StatsResponse:
+            """Get API usage statistics"""
+            try:
+                response = self.session.get(
+                    f"{self.base_url}/stats",
+                    timeout=self.timeout
+                )
+                response.raise_for_status()
+                data = response.json()
+                return StatsResponse(**data)
+            except requests.exceptions.RequestException as e:
+                raise IrisClientError(f"Failed to fetch stats: {str(e)}")
+
+        def health_check(self) -> bool:
+            """Check if API is healthy"""
+            try:
+                response = self.session.get(
+                    f"{self.base_url}/health",
+                    timeout=5.0
+                )
+                return response.ok and response.text == "OK"
+            except:
+                return False
+
+        def get_best_match(self, response: CompareResponse) -> Optional[MatchResult]:
+            """Get the best match from results"""
+            return response.matches[0] if response.matches else None
+
+        def filter_by_threshold(
+            self,
+            response: CompareResponse,
+            min_probability: float
+        ) -> List[MatchResult]:
+            """Filter matches by minimum probability"""
+            return [m for m in response.matches if m.probability >= min_probability]
+
+    # Usage Example
+    def main():
+        client = IrisClient(
+            base_url="http://localhost:8080",
+            max_retries=3,
+            timeout=30.0
+        )
+
+        try:
+            # Check health
+            if not client.health_check():
+                print("API is not healthy")
+                return
+
+            # Prepare people to compare
+            people = [
+                Person(name="Alice Johnson", image_url="https://example.com/photos/alice.jpg"),
+                Person(name="Bob Williams", image_url="https://example.com/photos/bob.jpg"),
+                Person(name="Carol Brown", image_url="https://example.com/photos/carol.jpg")
+            ]
+
+            # Compare faces
+            result = client.compare(
+                target_url="https://example.com/photos/event.jpg",
+                people=people
+            )
+
+            # Process results
+            best_match = client.get_best_match(result)
+            if best_match and best_match.probability >= 70:
+                print(f"Best match: {best_match.name} ({best_match.probability}% confidence)")
+            else:
+                print("No confident matches found")
+
+            # Show high confidence matches
+            high_confidence = client.filter_by_threshold(result, 60)
+            print(f"High confidence matches: {len(high_confidence)}")
+            for match in high_confidence:
+                print(f"  - {match.name}: {match.probability}%")
+
+            # Get stats
+            stats = client.get_stats()
+            print(f"Total requests: {stats.total_requests}")
+            print(f"Requests last minute: {stats.requests_last_minute}")
+
+        except IrisClientError as e:
+            print(f"Error: {e}")
+
+    if __name__ == "__main__":
+        main()
+    ```
+  </Tab>
+
+  <Tab title="Go">
+    ### Full-Featured Go Client
+
+    ```go
+    // iris_client.go
+    package iris
+
+    import (
+    	"bytes"
+    	"encoding/json"
+    	"fmt"
+    	"io"
+    	"net/http"
+    	"time"
+    )
+
+    // Person represents a person for comparison
+    type Person struct {
+    	Name     string `json:"name"`
+    	ImageURL string `json:"image_url"`
+    }
+
+    // MatchResult represents a face match result
+    type MatchResult struct {
+    	Name        string  `json:"name"`
+    	Probability float64 `json:"probability"`
+    }
+
+    // CompareRequest is the request payload for compare endpoint
+    type CompareRequest struct {
+    	TargetURL string   `json:"target_url"`
+    	People    []Person `json:"people"`
+    }
+
+    // CompareResponse is the response from compare endpoint
+    type CompareResponse struct {
+    	Matches []MatchResult `json:"matches"`
+    }
+
+    // StatsResponse contains API usage statistics
+    type StatsResponse struct {
+    	TotalRequests       uint64 `json:"total_requests"`
+    	RequestsLastSecond  int    `json:"requests_last_second"`
+    	RequestsLastMinute  int    `json:"requests_last_minute"`
+    	RequestsLastHour    int    `json:"requests_last_hour"`
+    }
+
+    // Client is the Iris API client
+    type Client struct {
+    	baseURL            string
+    	httpClient         *http.Client
+    	maxRetries         int
+    	retryDelay         time.Duration
+    	minInterval        time.Duration
+    	lastRequestTime    time.Time
+    }
+
+    // ClientOption is a functional option for Client configuration
+    type ClientOption func(*Client)
+
+    // WithMaxRetries sets the maximum number of retries
+    func WithMaxRetries(retries int) ClientOption {
+    	return func(c *Client) {
+    		c.maxRetries = retries
+    	}
+    }
+
+    // WithTimeout sets the HTTP client timeout
+    func WithTimeout(timeout time.Duration) ClientOption {
+    	return func(c *Client) {
+    		c.httpClient.Timeout = timeout
+    	}
+    }
+
+    // WithRequestsPerSecond sets the rate limit
+    func WithRequestsPerSecond(rps float64) ClientOption {
+    	return func(c *Client) {
+    		c.minInterval = time.Duration(float64(time.Second) / rps)
+    	}
+    }
+
+    // NewClient creates a new Iris API client
+    func NewClient(baseURL string, opts ...ClientOption) *Client {
+    	c := &Client{
+    		baseURL: baseURL,
+    		httpClient: &http.Client{
+    			Timeout: 30 * time.Second,
+    		},
+    		maxRetries:  3,
+    		retryDelay:  1 * time.Second,
+    		minInterval: time.Duration(float64(time.Second) / 4.5), // 4.5 req/s
+    	}
+
+    	for _, opt := range opts {
+    		opt(c)
+    	}
+
+    	return c
+    }
+
+    // rateLimit ensures minimum interval between requests
+    func (c *Client) rateLimit() {
+    	elapsed := time.Since(c.lastRequestTime)
+    	if elapsed < c.minInterval {
+    		time.Sleep(c.minInterval - elapsed)
+    	}
+    	c.lastRequestTime = time.Now()
+    }
+
+    // Compare compares target face against known people
+    func (c *Client) Compare(targetURL string, people []Person) (*CompareResponse, error) {
+    	return c.compareWithRetry(targetURL, people, 0)
+    }
+
+    func (c *Client) compareWithRetry(targetURL string, people []Person, retryCount int) (*CompareResponse, error) {
+    	c.rateLimit()
+
+    	req := CompareRequest{
+    		TargetURL: targetURL,
+    		People:    people,
+    	}
+
+    	payload, err := json.Marshal(req)
+    	if err != nil {
+    		return nil, fmt.Errorf("failed to marshal request: %w", err)
+    	}
+
+    	httpReq, err := http.NewRequest("POST", c.baseURL+"/compare", bytes.NewBuffer(payload))
+    	if err != nil {
+    		return nil, fmt.Errorf("failed to create request: %w", err)
+    	}
+    	httpReq.Header.Set("Content-Type", "application/json")
+
+    	resp, err := c.httpClient.Do(httpReq)
+    	if err != nil {
+    		return nil, fmt.Errorf("request failed: %w", err)
+    	}
+    	defer resp.Body.Close()
+
+    	switch resp.StatusCode {
+    	case http.StatusOK:
+    		var result CompareResponse
+    		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+    			return nil, fmt.Errorf("failed to decode response: %w", err)
+    		}
+    		return &result, nil
+
+    	case http.StatusTooManyRequests:
+    		if retryCount < c.maxRetries {
+    			delay := c.retryDelay * time.Duration(1<<retryCount)
+    			fmt.Printf("Rate limited. Retrying in %v... (%d/%d)\n", delay, retryCount+1, c.maxRetries)
+    			time.Sleep(delay)
+    			return c.compareWithRetry(targetURL, people, retryCount+1)
+    		}
+    		return nil, fmt.Errorf("rate limit exceeded after %d retries", c.maxRetries)
+
+    	case http.StatusInternalServerError:
+    		if retryCount < c.maxRetries {
+    			delay := c.retryDelay * time.Duration(1<<retryCount)
+    			fmt.Printf("Server error. Retrying in %v... (%d/%d)\n", delay, retryCount+1, c.maxRetries)
+    			time.Sleep(delay)
+    			return c.compareWithRetry(targetURL, people, retryCount+1)
+    		}
+    		return nil, fmt.Errorf("server error after %d retries", c.maxRetries)
+
+    	default:
+    		body, _ := io.ReadAll(resp.Body)
+    		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+    	}
+    }
+
+    // GetStats retrieves API usage statistics
+    func (c *Client) GetStats() (*StatsResponse, error) {
+    	resp, err := c.httpClient.Get(c.baseURL + "/stats")
+    	if err != nil {
+    		return nil, fmt.Errorf("request failed: %w", err)
+    	}
+    	defer resp.Body.Close()
+
+    	if resp.StatusCode != http.StatusOK {
+    		body, _ := io.ReadAll(resp.Body)
+    		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+    	}
+
+    	var stats StatsResponse
+    	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+    		return nil, fmt.Errorf("failed to decode response: %w", err)
+    	}
+
+    	return &stats, nil
+    }
+
+    // HealthCheck checks if the API is healthy
+    func (c *Client) HealthCheck() bool {
+    	resp, err := c.httpClient.Get(c.baseURL + "/health")
+    	if err != nil {
+    		return false
+    	}
+    	defer resp.Body.Close()
+
+    	body, _ := io.ReadAll(resp.Body)
+    	return resp.StatusCode == http.StatusOK && string(body) == "OK"
+    }
+
+    // GetBestMatch returns the highest probability match
+    func GetBestMatch(response *CompareResponse) *MatchResult {
+    	if len(response.Matches) == 0 {
+    		return nil
+    	}
+    	return &response.Matches[0]
+    }
+
+    // FilterByThreshold returns matches above minimum probability
+    func FilterByThreshold(response *CompareResponse, minProbability float64) []MatchResult {
+    	var filtered []MatchResult
+    	for _, match := range response.Matches {
+    		if match.Probability >= minProbability {
+    			filtered = append(filtered, match)
+    		}
+    	}
+    	return filtered
+    }
+
+    // Example usage
+    func Example() {
+    	client := NewClient(
+    		"http://localhost:8080",
+    		WithMaxRetries(3),
+    		WithTimeout(30*time.Second),
+    		WithRequestsPerSecond(4.5),
+    	)
+
+    	// Health check
+    	if !client.HealthCheck() {
+    		fmt.Println("API is not healthy")
+    		return
+    	}
+
+    	// Compare faces
+    	people := []Person{
+    		{Name: "Alice Johnson", ImageURL: "https://example.com/photos/alice.jpg"},
+    		{Name: "Bob Williams", ImageURL: "https://example.com/photos/bob.jpg"},
+    	}
+
+    	result, err := client.Compare("https://example.com/photos/event.jpg", people)
+    	if err != nil {
+    		fmt.Printf("Error: %v\n", err)
+    		return
+    	}
+
+    	// Process results
+    	bestMatch := GetBestMatch(result)
+    	if bestMatch != nil && bestMatch.Probability >= 70 {
+    		fmt.Printf("Best match: %s (%.0f%% confidence)\n", bestMatch.Name, bestMatch.Probability)
+    	} else {
+    		fmt.Println("No confident matches found")
+    	}
+
+    	// Get stats
+    	stats, err := client.GetStats()
+    	if err == nil {
+    		fmt.Printf("Total requests: %d\n", stats.TotalRequests)
+    	}
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Real-World Use Cases
+
+### Use Case 1: Event Photo Matching
+
+Match attendees in event photos against a guest list:
+
+```python
+from iris_client import IrisClient, Person
+from typing import List, Dict
+import os
+
+class EventPhotoMatcher:
+    def __init__(self, api_url: str):
+        self.client = IrisClient(base_url=api_url)
+    
+    def match_photo_to_guests(
+        self,
+        photo_url: str,
+        guest_list: List[Dict[str, str]],
+        min_confidence: float = 70.0
+    ) -> List[str]:
+        """Match a photo against event guest list"""
+        
+        # Convert guest list to Person objects
+        people = [
+            Person(name=guest["name"], image_url=guest["photo_url"])
+            for guest in guest_list
+        ]
+        
+        # Compare
+        result = self.client.compare(photo_url, people)
+        
+        # Return high-confidence matches
+        matches = self.client.filter_by_threshold(result, min_confidence)
+        return [m.name for m in matches]
+    
+    def process_event_photos(
+        self,
+        photo_urls: List[str],
+        guest_list: List[Dict[str, str]]
+    ) -> Dict[str, List[str]]:
+        """Process all event photos and identify guests"""
+        results = {}
+        
+        for photo_url in photo_urls:
+            matched_guests = self.match_photo_to_guests(photo_url, guest_list)
+            if matched_guests:
+                results[photo_url] = matched_guests
+        
+        return results
+
+# Usage
+matcher = EventPhotoMatcher("http://localhost:8080")
+
+guest_list = [
+    {"name": "Alice Smith", "photo_url": "https://example.com/guests/alice.jpg"},
+    {"name": "Bob Jones", "photo_url": "https://example.com/guests/bob.jpg"},
+    # ... more guests
+]
+
+event_photos = [
+    "https://example.com/event/photo1.jpg",
+    "https://example.com/event/photo2.jpg",
+]
+
+matches = matcher.process_event_photos(event_photos, guest_list)
+for photo, guests in matches.items():
+    print(f"{photo}: {', '.join(guests)}")
+```
+
+### Use Case 2: Security Access Control
+
+Verify identity for building access:
+
+```javascript
+// security-access.js
+import { IrisClient } from './iris-client';
+import { createReadStream } from 'fs';
+import FormData from 'form-data';
+
+class SecurityAccessControl {
+  constructor(apiUrl, authorizedPersons) {
+    this.client = new IrisClient({ baseUrl: apiUrl });
+    this.authorizedPersons = authorizedPersons;
+  }
+
+  async verifyAccess(capturedImageUrl) {
+    try {
+      const result = await this.client.compare(
+        capturedImageUrl,
+        this.authorizedPersons
+      );
+
+      const bestMatch = this.client.getBestMatch(result);
+      
+      // Strict threshold for security
+      if (bestMatch && bestMatch.probability >= 85) {
+        return {
+          granted: true,
+          person: bestMatch.name,
+          confidence: bestMatch.probability,
+          timestamp: new Date().toISOString()
+        };
+      }
+
+      return {
+        granted: false,
+        reason: 'No match found or confidence too low',
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      console.error('Access verification failed:', error);
+      return {
+        granted: false,
+        reason: 'System error',
+        error: error.message
+      };
+    }
+  }
+
+  async logAccessAttempt(result) {
+    // Log to database or security system
+    console.log('Access attempt:', JSON.stringify(result, null, 2));
+  }
+}
+
+// Usage
+const authorizedPersons = [
+  { name: 'Employee 001 - John Doe', image_url: 'https://secure.example.com/employees/001.jpg' },
+  { name: 'Employee 002 - Jane Smith', image_url: 'https://secure.example.com/employees/002.jpg' },
+];
+
+const accessControl = new SecurityAccessControl(
+  'http://localhost:8080',
+  authorizedPersons
+);
+
+// Verify access from door camera
+const capturedImage = 'https://security.example.com/camera/capture-123.jpg';
+const result = await accessControl.verifyAccess(capturedImage);
+
+if (result.granted) {
+  console.log(`✓ Access granted to ${result.person}`);
+  // Trigger door unlock
+} else {
+  console.log(`✗ Access denied: ${result.reason}`);
+  // Sound alarm or notify security
+}
+
+await accessControl.logAccessAttempt(result);
+```
+
+### Use Case 3: Photo Organization
+
+Automatically tag and organize photos by people:
+
+```go
+package main
+
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+	"your-module/iris"
+)
+
+type PhotoOrganizer struct {
+	client *iris.Client
+	knownPeople []iris.Person
+}
+
+func NewPhotoOrganizer(apiURL string, knownPeople []iris.Person) *PhotoOrganizer {
+	return &PhotoOrganizer{
+		client: iris.NewClient(apiURL),
+		knownPeople: knownPeople,
+	}
+}
+
+func (p *PhotoOrganizer) TagPhoto(photoURL string) ([]string, error) {
+	result, err := p.client.Compare(photoURL, p.knownPeople)
+	if err != nil {
+		return nil, fmt.Errorf("comparison failed: %w", err)
+	}
+
+	// Get all matches above 60% confidence
+	matches := iris.FilterByThreshold(result, 60.0)
+	
+	tags := make([]string, len(matches))
+	for i, match := range matches {
+		tags[i] = match.Name
+	}
+	
+	return tags, nil
+}
+
+func (p *PhotoOrganizer) OrganizePhotoCollection(photoURLs []string) map[string][]string {
+	photoTags := make(map[string][]string)
+	
+	for _, photoURL := range photoURLs {
+		tags, err := p.TagPhoto(photoURL)
+		if err != nil {
+			fmt.Printf("Error tagging %s: %v\n", photoURL, err)
+			continue
+		}
+		
+		if len(tags) > 0 {
+			photoTags[photoURL] = tags
+			fmt.Printf("Tagged %s: %v\n", filepath.Base(photoURL), strings.Join(tags, ", "))
+		}
+	}
+	
+	return photoTags
+}
+
+func main() {
+	knownPeople := []iris.Person{
+		{Name: "Family/Mom", ImageURL: "https://photos.example.com/family/mom.jpg"},
+		{Name: "Family/Dad", ImageURL: "https://photos.example.com/family/dad.jpg"},
+		{Name: "Family/Sister", ImageURL: "https://photos.example.com/family/sister.jpg"},
+		{Name: "Friends/Alice", ImageURL: "https://photos.example.com/friends/alice.jpg"},
+	}
+	
+	organizer := NewPhotoOrganizer("http://localhost:8080", knownPeople)
+	
+	photos := []string{
+		"https://photos.example.com/vacation/IMG_001.jpg",
+		"https://photos.example.com/vacation/IMG_002.jpg",
+		"https://photos.example.com/vacation/IMG_003.jpg",
+	}
+	
+	tags := organizer.OrganizePhotoCollection(photos)
+	fmt.Printf("\nOrganized %d photos with tags\n", len(tags))
+}
+```
+
+## Using Data URIs
+
+For client-side uploads or when you have image data in memory:
+
+```javascript
+// Convert File to Data URI and send to API
+async function compareUploadedImage(file, knownPeople) {
+  const client = new IrisClient({ baseUrl: 'http://localhost:8080' });
+  
+  // Convert File to Data URI
+  const dataUri = await fileToDataUri(file);
+  
+  // Compare
+  const result = await client.compare(dataUri, knownPeople);
+  return result;
+}
+
+function fileToDataUri(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => resolve(e.target.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// Usage in a form handler
+document.getElementById('photoUpload').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  
+  const knownPeople = [
+    { name: 'John', image_url: 'https://example.com/john.jpg' }
+  ];
+  
+  try {
+    const result = await compareUploadedImage(file, knownPeople);
+    console.log('Matches:', result.matches);
+  } catch (error) {
+    console.error('Error:', error);
+  }
+});
+```
+
+## Batch Processing
+
+Process multiple comparisons efficiently:
+
+```python
+import asyncio
+import aiohttp
+from typing import List
+
+class AsyncIrisClient:
+    def __init__(self, base_url: str):
+        self.base_url = base_url
+        self.session = None
+    
+    async def __aenter__(self):
+        self.session = aiohttp.ClientSession()
+        return self
+    
+    async def __aexit__(self, *args):
+        await self.session.close()
+    
+    async def compare(self, target_url: str, people: List[dict]) -> dict:
+        async with self.session.post(
+            f"{self.base_url}/compare",
+            json={"target_url": target_url, "people": people}
+        ) as response:
+            if response.status == 429:
+                # Wait and retry
+                await asyncio.sleep(1)
+                return await self.compare(target_url, people)
+            response.raise_for_status()
+            return await response.json()
+
+async def batch_compare(photos: List[str], people: List[dict]):
+    async with AsyncIrisClient("http://localhost:8080") as client:
+        # Process with controlled concurrency
+        semaphore = asyncio.Semaphore(4)  # Max 4 concurrent requests
+        
+        async def compare_with_limit(photo):
+            async with semaphore:
+                return await client.compare(photo, people)
+        
+        # Run all comparisons
+        tasks = [compare_with_limit(photo) for photo in photos]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        return results
+
+# Usage
+photos = [f"https://example.com/photo{i}.jpg" for i in range(100)]
+people = [{"name": "Person", "image_url": "https://example.com/person.jpg"}]
+
+results = asyncio.run(batch_compare(photos, people))
+print(f"Processed {len(results)} photos")
+```
+
+## Testing Your Integration
+
+<Steps>
+  <Step title="Verify API Health">
+    ```bash
+    curl http://localhost:8080/health
+    # Expected: OK
+    ```
+  </Step>
+
+  <Step title="Test with Known Images">
+    Use the same image as both target and person to verify high match:
+    ```bash
+    curl -X POST http://localhost:8080/compare \
+      -H "Content-Type: application/json" \
+      -d '{
+        "target_url": "https://example.com/test.jpg",
+        "people": [{"name": "Test", "image_url": "https://example.com/test.jpg"}]
+      }'
+    # Should return high probability (>90%)
+    ```
+  </Step>
+
+  <Step title="Test Rate Limiting">
+    Send requests rapidly to trigger 429:
+    ```bash
+    for i in {1..20}; do
+      curl -X POST http://localhost:8080/compare \
+        -H "Content-Type: application/json" \
+        -d '{"target_url": "https://example.com/test.jpg", "people": []}' &
+    done
+    wait
+    ```
+  </Step>
+
+  <Step title="Monitor Statistics">
+    ```bash
+    curl http://localhost:8080/stats
+    # Returns request metrics
+    ```
+  </Step>
+</Steps>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Connection Pooling" icon="water">
+    Reuse HTTP clients/sessions instead of creating new connections for each request.
+  </Card>
+  
+  <Card title="Implement Timeouts" icon="clock">
+    Set reasonable timeouts (30s recommended) to avoid hanging requests.
+  </Card>
+  
+  <Card title="Handle Rate Limits" icon="gauge-high">
+    Implement exponential backoff when receiving 429 responses.
+  </Card>
+  
+  <Card title="Validate Images First" icon="check">
+    Verify image URLs are accessible before sending to API.
+  </Card>
+  
+  <Card title="Log Errors" icon="file-lines">
+    Log all API errors for debugging and monitoring.
+  </Card>
+  
+  <Card title="Cache Results" icon="database">
+    Cache comparison results to reduce repeated API calls.
+  </Card>
+  
+  <Card title="Use Async Processing" icon="rocket">
+    Process multiple comparisons asynchronously when possible.
+  </Card>
+  
+  <Card title="Monitor Performance" icon="chart-line">
+    Track response times and success rates in production.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Reference" icon="book" href="/api/compare">
+    Explore detailed endpoint documentation
+  </Card>
+  <Card title="Error Handling" icon="triangle-exclamation" href="/api/error-handling">
+    Learn about error responses and troubleshooting
+  </Card>
+  <Card title="Authentication" icon="shield-halved" href="/api/authentication">
+    Implement security for production deployments
+  </Card>
+  <Card title="Statistics" icon="chart-bar" href="/api/stats">
+    Monitor API usage and performance
+  </Card>
+</CardGroup>

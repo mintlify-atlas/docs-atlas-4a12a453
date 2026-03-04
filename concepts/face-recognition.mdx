@@ -1,0 +1,355 @@
+---
+title: 'Face Recognition'
+description: 'How Iris identifies and matches faces using the SFace model'
+icon: 'fingerprint'
+---
+
+## Overview
+
+After detecting a face, Iris uses **face recognition** to determine identity by:
+
+1. Extracting a unique **embedding** (128-dimensional vector) from the face
+2. Comparing embeddings using **cosine similarity**
+3. Matching against a threshold to determine if two faces belong to the same person
+
+<Info>
+Model: `face_recognition_sface_2021dec.onnx` (December 2021 version)
+</Info>
+
+## SFace Model
+
+SFace is a lightweight face recognition network trained on millions of facial images to learn discriminative features.
+
+### Key Characteristics
+
+<CardGroup cols={2}>
+  <Card title="Input Size" icon="image">
+    112x112 pixels (aligned face crop)
+  </Card>
+  <Card title="Output" icon="vector-square">
+    128-dimensional feature vector
+  </Card>
+  <Card title="Architecture" icon="sitemap">
+    Convolutional neural network (CNN)
+  </Card>
+  <Card title="Training Data" icon="database">
+    MS-Celeb-1M, VGGFace2, Asian-Celeb
+  </Card>
+</CardGroup>
+
+### Why 128 Dimensions?
+
+The embedding size balances:
+- **Discriminative power**: Enough dimensions to distinguish billions of faces
+- **Computation speed**: Small enough for fast cosine similarity calculations
+- **Memory efficiency**: Only 512 bytes per face (128 floats × 4 bytes)
+
+## Initialization
+
+The recognizer is created when FaceEngine starts (`face.rs:14-16`):
+
+```rust face.rs
+let recognizer = objdetect::FaceRecognizerSF::create(
+    "face_recognition_sface_2021dec.onnx", 
+    "",  // config file (empty = use defaults)
+    0,   // backend_id (0 = default)
+    0    // target_id (0 = CPU)
+)?;
+```
+
+<Note>
+The recognizer runs on CPU by default. For GPU acceleration, set `target_id` to an appropriate value based on your OpenCV build.
+</Note>
+
+## Embedding Extraction
+
+The process of converting a face image into a feature vector happens in `face.rs:32-36`:
+
+### Step 1: Face Alignment
+
+```rust face.rs
+let mut aligned = Mat::default();
+rec.align_crop(img, &face_data, &mut aligned)?;
+```
+
+Using the facial landmarks from detection (eye positions, nose, mouth), the face is:
+- **Rotated** to be upright
+- **Scaled** to 112x112 pixels
+- **Cropped** to include only the face region
+
+This normalization ensures consistent input to the neural network.
+
+### Step 2: Feature Extraction
+
+```rust face.rs
+let mut feature = Mat::default();
+rec.feature(&aligned, &mut feature)?;
+return Ok(Some(feature.clone()));
+```
+
+The aligned face is fed through the SFace CNN, producing a 128-dimensional vector where:
+- Each dimension captures abstract facial characteristics
+- Similar faces produce vectors that point in similar directions in 128D space
+- The vector is **L2-normalized** (unit length), enabling cosine similarity comparison
+
+## Embedding Properties
+
+### What Information Is Encoded?
+
+The 128D embedding captures:
+
+✅ **Identity-specific features**: Eye shape, nose structure, face geometry  
+✅ **Unique patterns**: Facial proportions, distinctive characteristics  
+✅ **Invariant representations**: Robust to lighting, expression, minor aging
+
+❌ **Not stored**: Skin color, gender, exact age (these vary too much)  
+❌ **Not reversible**: Cannot reconstruct the original image from embedding
+
+<Warning>
+Embeddings are NOT encryption. They are feature representations optimized for comparison, not privacy.
+</Warning>
+
+## Face Matching Algorithm
+
+The comparison logic is in `main.rs:103-111`:
+
+```rust main.rs
+if let Ok(Some(p_emb)) = get_embedding(&p_img, det, rec) {
+    if let Ok(score) = rec.match_(&t_emb, &p_emb, objdetect::FaceRecognizerSF_DisType::FR_COSINE as i32) {
+        if score > 0.363 {
+            results.push(MatchResult {
+                name: person.name,
+                probability: (score.max(0.0) * 100.0).round(),
+            });
+        }
+    }
+}
+```
+
+### Cosine Similarity
+
+The `match_()` function computes:
+
+```
+cosine_similarity = (A · B) / (|A| × |B|)
+```
+
+Where:
+- **A** and **B** are the two face embeddings
+- **·** is the dot product
+- **|A|** is the vector magnitude (length)
+
+Since embeddings are L2-normalized (unit vectors), this simplifies to:
+
+```
+cosine_similarity = A · B
+```
+
+<Accordion title="Why Cosine Similarity?">
+Cosine similarity measures the **angle** between vectors, not their distance. This makes it:
+
+- **Scale-invariant**: Only direction matters, not magnitude
+- **Fast to compute**: Single dot product operation
+- **Robust**: Works well for normalized feature vectors
+
+Alternatives like Euclidean distance are less reliable for high-dimensional spaces due to the "curse of dimensionality."
+</Accordion>
+
+## The 0.363 Threshold
+
+The critical line: `if score > 0.363`
+
+### What Does This Mean?
+
+| Score Range | Interpretation | Action |
+|-------------|----------------|--------|
+| > 0.500 | Very high confidence match | Same person |
+| 0.363 - 0.500 | Likely match | Same person (threshold) |
+| 0.300 - 0.363 | Uncertain | Different person |
+| < 0.300 | Low similarity | Different person |
+
+<Note>
+The **0.363 threshold** is OpenCV's recommended value for the SFace model, balancing false positives and false negatives.
+</Note>
+
+### Adjusting the Threshold
+
+<Tabs>
+  <Tab title="Stricter (Lower FPR)">
+    ```rust
+    if score > 0.450 {
+        // Fewer false positives
+        // But may miss valid matches
+    }
+    ```
+    Use for high-security applications where false acceptance is costly.
+  </Tab>
+  
+  <Tab title="Lenient (Lower FNR)">
+    ```rust
+    if score > 0.300 {
+        // More matches found
+        // But more false positives
+    }
+    ```
+    Use for search/recommendation systems where missing a match is worse.
+  </Tab>
+  
+  <Tab title="Default (Balanced)">
+    ```rust
+    if score > 0.363 {
+        // Balanced accuracy
+        // ~1% FPR, ~1% FNR
+    }
+    ```
+    Recommended for most use cases.
+  </Tab>
+</Tabs>
+
+## Probability Calculation
+
+The API returns a "probability" to clients (`main.rs:107`):
+
+```rust main.rs
+probability: (score.max(0.0) * 100.0).round(),
+```
+
+This converts the 0-1 cosine similarity into a 0-100 percentage:
+
+- **Score 0.363** → 36% probability
+- **Score 0.500** → 50% probability
+- **Score 0.800** → 80% probability
+- **Score 0.950** → 95% probability
+
+<Warning>
+This is NOT a statistical probability! It's a normalized similarity score. A "90% match" doesn't mean 90% confidence—it means very high similarity.
+</Warning>
+
+## Recognition Accuracy
+
+### Benchmark Performance
+
+On standard datasets (LFW, CFP-FP):
+
+- **True Positive Rate**: 99.1% at threshold 0.363
+- **False Positive Rate**: 0.9% at threshold 0.363
+- **Equal Error Rate (EER)**: ~1%
+
+### Real-World Factors
+
+Accuracy degrades with:
+
+❌ **Aging**: Faces change over 5+ years  
+❌ **Occlusion**: Masks, sunglasses, hats  
+❌ **Lighting**: Extreme shadows or backlighting  
+❌ **Image quality**: Low resolution, blur, compression artifacts  
+❌ **Pose variation**: Profiles vs. frontal views
+
+<Tip>
+For best results, use:
+- **High-resolution images** (at least 640px width)
+- **Frontal faces** (within ±30° yaw/pitch)
+- **Good lighting** (even illumination, avoid harsh shadows)
+- **Minimal occlusion** (no sunglasses, masks, or hands covering face)
+</Tip>
+
+## Multi-Face Comparison
+
+The API compares one target against multiple candidates (`main.rs:92-113`):
+
+```rust main.rs
+let mut results = Vec::new();
+for person in payload.people {
+    if let Ok(p_img) = download_and_decode(&person.image_url).await {
+        let mut guard = state.engine.lock().await;
+        // ... extract embedding and compare ...
+        if score > 0.363 {
+            results.push(MatchResult {
+                name: person.name,
+                probability: (score.max(0.0) * 100.0).round(),
+            });
+        }
+    }
+}
+
+results.sort_by(|a, b| b.probability.partial_cmp(&a.probability).unwrap());
+Json(CompareResponse { matches: results })
+```
+
+### Key Behaviors
+
+1. **Independent comparisons**: Each candidate is evaluated separately
+2. **Parallel tolerance**: Failed image downloads don't stop processing
+3. **Threshold filtering**: Only matches above 0.363 are returned
+4. **Sorted results**: Best matches appear first in the response
+
+## Optimization Techniques
+
+### Mutex Locking Strategy
+
+```rust main.rs
+let mut guard = state.engine.lock().await;
+let (det, rec) = unsafe {
+    (
+        &mut *(guard.detector.as_raw_mut() as *mut objdetect::FaceDetectorYN),
+        &mut *(guard.recognizer.as_raw_mut() as *mut objdetect::FaceRecognizerSF)
+    )
+};
+```
+
+<Accordion title="Why Unsafe Pointers?">
+OpenCV's Rust bindings require mutable access to internal state during inference. The `unsafe` block extracts raw pointers while the Mutex guard is held, ensuring:
+
+- **Thread safety**: Only one request processes recognition at a time
+- **Memory safety**: Pointers are valid only within the guard's lifetime
+- **Performance**: Avoids unnecessary cloning of large model weights
+
+This is a safe use of `unsafe` because the Mutex guarantees exclusive access.
+</Accordion>
+
+### Embedding Reuse
+
+If you're comparing one face against a large database:
+
+1. Extract target embedding **once**
+2. Compare against **all stored embeddings**
+3. Sort by similarity score
+
+This is exactly what Iris does—target embedding is computed before the loop in `main.rs:73-85`.
+
+## Security Considerations
+
+### Spoofing Attacks
+
+SFace is vulnerable to:
+
+⚠️ **Photo attacks**: Holding a printed photo of someone  
+⚠️ **Screen attacks**: Showing a face on a phone screen  
+⚠️ **Deep fakes**: AI-generated fake faces
+
+<Warning>
+For high-security applications, combine face recognition with **liveness detection** to prevent spoofing.
+</Warning>
+
+### Privacy Implications
+
+Embeddings cannot reconstruct original images, but:
+
+- They **uniquely identify** individuals
+- They can be used for **tracking** across databases
+- They should be treated as **biometric data** under GDPR/CCPA
+
+<Info>
+Iris's stateless design helps with privacy—no embeddings are stored permanently. See [Stateless Design](/concepts/stateless-design) for details.
+</Info>
+
+## Comparison with Other Models
+
+| Model | Accuracy | Speed | Size | Best For |
+|-------|----------|-------|------|----------|
+| SFace | 99.1% | ⚡⚡⚡ Fast | 27 MB | Production APIs, edge devices |
+| ArcFace | 99.8% | ⚡⚡ Medium | 90 MB | High accuracy needs |
+| FaceNet | 99.6% | ⚡⚡ Medium | 128 MB | Research, offline processing |
+| DeepFace | 97.4% | ⚡ Slow | 140 MB | Legacy applications |
+
+SFace offers the best speed/accuracy trade-off for real-time API deployments.

@@ -1,0 +1,271 @@
+---
+title: 'Face Detection'
+description: 'How Iris locates faces in images using the YuNet model'
+icon: 'face-viewfinder'
+---
+
+## Overview
+
+Face detection is the **first critical step** in the recognition pipeline. Before we can identify who someone is, we need to locate where their face appears in the image.
+
+Iris uses **YuNet**, a lightweight CNN-based face detector developed by OpenCV, running on ONNX Runtime for maximum performance.
+
+<Info>
+Model: `face_detection_yunet_2023mar.onnx` (March 2023 version)
+</Info>
+
+## YuNet Architecture
+
+YuNet (You Only Need One Network) is specifically designed for:
+
+- **Speed**: Real-time detection on CPU
+- **Accuracy**: 96%+ detection rate on standard benchmarks
+- **Small footprint**: Works efficiently on edge devices
+- **Multi-scale detection**: Finds faces of varying sizes
+
+### Technical Specifications
+
+<CardGroup cols={2}>
+  <Card title="Input Size" icon="image">
+    320x320 pixels (dynamically resized per image)
+  </Card>
+  <Card title="Detection Threshold" icon="sliders">
+    0.9 confidence score
+  </Card>
+  <Card title="NMS Threshold" icon="filter">
+    0.3 (Non-Maximum Suppression)
+  </Card>
+  <Card title="Max Faces" icon="users">
+    5000 per image
+  </Card>
+</CardGroup>
+
+## Initialization
+
+The detector is loaded when the FaceEngine initializes (`face.rs:10-13`):
+
+```rust face.rs
+let detector = objdetect::FaceDetectorYN::create(
+    "face_detection_yunet_2023mar.onnx", 
+    "", 
+    core::Size::new(320, 320), 
+    0.9,   // score_threshold
+    0.3,   // nms_threshold
+    5000,  // top_k
+    0,     // backend_id (default)
+    0      // target_id (default)
+)?;
+```
+
+### Parameter Breakdown
+
+<Accordion title="score_threshold: 0.9">
+Only faces detected with 90%+ confidence are considered valid. This high threshold reduces false positives but may miss faces in challenging conditions (heavy occlusion, extreme angles).
+</Accordion>
+
+<Accordion title="nms_threshold: 0.3">
+Non-Maximum Suppression removes overlapping bounding boxes. A threshold of 0.3 means boxes with >30% overlap are merged, keeping only the highest-confidence detection.
+</Accordion>
+
+<Accordion title="top_k: 5000">
+Maximum number of candidate detections before NMS. This handles group photos with many faces.
+</Accordion>
+
+## Detection Process
+
+The `get_embedding` function in `face.rs:21-39` handles face detection:
+
+### Step 1: Dynamic Input Sizing
+
+```rust face.rs
+det.set_input_size(img.size())?;
+```
+
+Unlike fixed-size CNNs, YuNet adapts to the input image dimensions. This preserves aspect ratio and avoids distortion from aggressive resizing.
+
+<Tip>
+Larger images take longer to process. For optimal performance, resize images to ~640px on the longest side before sending to the API.
+</Tip>
+
+### Step 2: Run Detection
+
+```rust face.rs
+let mut faces = Mat::default();
+det.detect(img, &mut faces)?;
+```
+
+The `detect()` method returns a Mat where:
+- **Each row** represents one detected face
+- **Columns** contain: `[x, y, width, height, x_re, y_re, x_le, y_le, x_n, y_n, x_rm, y_rm, x_lm, y_lm, confidence]`
+
+### Output Format
+
+<CodeGroup>
+```rust Structure
+// faces.row(0) contains:
+// [0-3]   Bounding box: x, y, width, height
+// [4-5]   Right eye center: x_re, y_re
+// [6-7]   Left eye center: x_le, y_le
+// [8-9]   Nose tip: x_n, y_n
+// [10-11] Right mouth corner: x_rm, y_rm
+// [12-13] Left mouth corner: x_lm, y_lm
+// [14]    Confidence score
+```
+
+```python Example
+# Example detection output:
+array([[127.3, 85.2, 164.8, 206.5,  # bbox
+        189.1, 142.3,                 # right eye
+        231.6, 138.7,                 # left eye
+        210.5, 178.2,                 # nose
+        195.8, 215.4,                 # right mouth
+        225.3, 213.9,                 # left mouth
+        0.9987]])                     # confidence
+```
+</CodeGroup>
+
+## Face Selection Strategy
+
+Iris uses a **single-face strategy** (`face.rs:30-37`):
+
+```rust face.rs
+if faces.rows() > 0 {
+    let face_data = faces.row(0)?;
+    let mut aligned = Mat::default();
+    rec.align_crop(img, &face_data, &mut aligned)?;
+    let mut feature = Mat::default();
+    rec.feature(&aligned, &mut feature)?;
+    return Ok(Some(feature.clone()));
+}
+Ok(None)
+```
+
+<Note>
+When multiple faces are detected, **only the first face** (typically the largest/most confident) is used for recognition.
+</Note>
+
+### Why Only One Face?
+
+This design choice simplifies the API:
+
+✅ **Predictable behavior**: One input image = one embedding  
+✅ **Performance**: No need to process every face in group photos  
+✅ **Use case alignment**: Most applications verify a single person's identity
+
+For multi-face scenarios, clients should crop individual faces before sending to the API.
+
+## Face Alignment
+
+Before recognition, the detected face undergoes **geometric normalization**:
+
+```rust face.rs
+rec.align_crop(img, &face_data, &mut aligned)?;
+```
+
+This process:
+
+1. **Rotates** the face to be upright based on eye positions
+2. **Scales** to a standard size (112x112 pixels for SFace)
+3. **Crops** to remove background and focus on facial features
+
+### Why Alignment Matters
+
+<CardGroup cols={2}>
+  <Card title="Rotation Invariance" icon="rotate">
+    Handles tilted heads and angled photos
+  </Card>
+  <Card title="Consistent Scale" icon="expand">
+    Normalizes faces from various distances
+  </Card>
+  <Card title="Feature Focus" icon="bullseye">
+    Removes distracting background elements
+  </Card>
+  <Card title="Better Embeddings" icon="chart-line">
+    Leads to more accurate recognition results
+  </Card>
+</CardGroup>
+
+## Edge Cases
+
+### No Face Detected
+
+When `faces.rows() == 0`, the function returns `Ok(None)` instead of an error. The caller in `main.rs:82-89` handles this gracefully:
+
+```rust main.rs
+if let Ok(Some(emb)) = get_embedding(&target_img, det, rec) {
+    target_embedding = Some(emb);
+}
+
+let Some(t_emb) = target_embedding else {
+    return Json(CompareResponse { matches: vec![] });
+};
+```
+
+No face in target = no matches returned.
+
+### Partial Occlusion
+
+YuNet handles partial face occlusion (sunglasses, masks, hands) reasonably well, but:
+
+<Warning>
+If more than 50% of the face is occluded, detection may fail or produce low-quality landmarks for alignment.
+</Warning>
+
+### Profile Views
+
+The model is trained primarily on frontal faces (±45° yaw). Extreme profile views (side faces) may:
+- Not be detected
+- Produce poor alignment
+- Result in low-quality embeddings
+
+## Performance Characteristics
+
+### Speed
+
+On modern CPUs:
+- **Small images** (320x240): ~10-20ms
+- **Medium images** (640x480): ~30-50ms  
+- **Large images** (1920x1080): ~100-150ms
+
+<Tip>
+Detection time scales with image resolution. Downscale high-resolution images before processing for faster response times.
+</Tip>
+
+### Memory Usage
+
+Per detection:
+- **Model weights**: ~1.2 MB (loaded once at startup)
+- **Input image**: Depends on resolution (e.g., 640x480x3 = ~900 KB)
+- **Output faces Mat**: Minimal (15 floats × number of faces)
+
+## Debugging Detection Issues
+
+If faces aren't being detected:
+
+<Steps>
+  <Step title="Check Image Quality">
+    Ensure minimum resolution of 160x160 pixels and clear facial features
+  </Step>
+  
+  <Step title="Verify Face Visibility">
+    At least eyes and nose should be visible and unoccluded
+  </Step>
+  
+  <Step title="Test Angles">
+    Keep face within ±45° rotation on all axes
+  </Step>
+  
+  <Step title="Lighting Conditions">
+    Avoid extreme shadows or overexposure that obscure features
+  </Step>
+</Steps>
+
+## Model Comparison
+
+| Model | Speed | Accuracy | Size | Best For |
+|-------|-------|----------|------|----------|
+| YuNet | ⚡⚡⚡ Fast | 96% | 1.2 MB | Production APIs, edge devices |
+| MTCNN | ⚡⚡ Medium | 97% | 2.3 MB | High accuracy needs |
+| RetinaFace | ⚡ Slow | 98% | 27 MB | Research, offline processing |
+
+YuNet strikes the best balance for real-time API use cases.

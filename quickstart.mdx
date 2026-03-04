@@ -1,80 +1,524 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get Iris running locally and make your first face comparison in under 5 minutes
 ---
 
-## Get started in three steps
+## Prerequisites
 
-Get your documentation site running locally and make your first customization.
-
-### Step 1: Set up your local environment
-
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
+Before starting, ensure you have the following installed on your system:
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Rust" icon="rust">
+    Install via [rustup](https://rustup.rs/)
+    
+    ```bash
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    ```
+  </Card>
+  
+  <Card title="OpenCV 4.x" icon="eye">
+    Required for image processing
+    
+    <Tabs>
+      <Tab title="macOS">
+        ```bash
+        brew install opencv
+        ```
+      </Tab>
+      <Tab title="Ubuntu/Debian">
+        ```bash
+        sudo apt install libopencv-dev
+        ```
+      </Tab>
+      <Tab title="Fedora/RHEL">
+        ```bash
+        sudo dnf install opencv-devel
+        ```
+      </Tab>
+    </Tabs>
+  </Card>
 </CardGroup>
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  For Windows installation, follow the [OpenCV-Rust installation guide](https://github.com/twistedfall/opencv-rust#windows).
+</Note>
+
+## Installation
+
+<Steps>
+  <Step title="Clone the repository">
+    Clone Iris from GitHub and navigate to the project directory:
+    
+    ```bash
+    git clone https://github.com/crane04/iris.git
+    cd iris
+    ```
+    
+    The repository includes:
+    - `src/` - Rust source code
+    - `Cargo.toml` - Dependency configuration
+    - `setup.sh` - AI model download script
+    - `Dockerfile` - Container deployment config
+  </Step>
+  
+  <Step title="Download AI models">
+    Iris requires two ONNX models for face detection and recognition. These files are excluded from Git due to size (~5MB each).
+    
+    **Option 1: Automated setup (recommended)**
+    
+    ```bash
+    chmod +x setup.sh
+    ./setup.sh
+    ```
+    
+    **Option 2: Manual download**
+    
+    ```bash
+    # YuNet - Face Detection Model
+    curl -L https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx \
+      -o face_detection_yunet_2023mar.onnx
+    
+    # SFace - Face Recognition Model
+    curl -L https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx \
+      -o face_recognition_sface_2021dec.onnx
+    ```
+    
+    <Info>
+      These models are from [OpenCV Zoo](https://github.com/opencv/opencv_zoo), a collection of pre-trained deep learning models optimized for OpenCV.
+    </Info>
+  </Step>
+  
+  <Step title="Build and start the server">
+    Compile Iris in release mode for optimal performance:
+    
+    ```bash
+    cargo run --release
+    ```
+    
+    Expected output:
+    ```
+    Initializing Iris Face AI...
+    Iris API running on http://localhost:8080
+    ```
+    
+    <Tip>
+      First compilation may take 3-5 minutes as Cargo downloads and compiles all dependencies. Subsequent builds will be much faster.
+    </Tip>
+    
+    The API server is now running with:
+    - **Port:** 8080
+    - **Rate limit:** 5 requests/second per IP (burst: 10)
+    - **CORS:** Enabled for all origins
+  </Step>
+</Steps>
+
+## Verify Installation
+
+Test that Iris is running correctly:
+
+<CodeGroup>
+  ```bash curl
+  curl http://localhost:8080/health
+  ```
+  
+  ```javascript fetch
+  fetch('http://localhost:8080/health')
+    .then(response => response.text())
+    .then(data => console.log(data));
+  ```
+  
+  ```python requests
+  import requests
+  
+  response = requests.get('http://localhost:8080/health')
+  print(response.text)
+  ```
+</CodeGroup>
+
+**Expected response:**
+```
+OK
+```
+
+## Your First Face Comparison
+
+Let's compare a target face against a database of people to find matches.
+
+<Steps>
+  <Step title="Understand the request structure">
+    The `/compare` endpoint accepts a JSON payload with:
+    
+    - `target_url` - The face you want to identify (URL or Base64 data URI)
+    - `people[]` - Array of known individuals to compare against
+      - `name` - Identifier for this person (e.g., patient ID)
+      - `image_url` - Reference photo (URL or Base64 data URI)
+    
+    ```json
+    {
+      "target_url": "<image-to-identify>",
+      "people": [
+        {
+          "name": "Patient-001",
+          "image_url": "<reference-photo>"
+        }
+      ]
+    }
+    ```
+  </Step>
+  
+  <Step title="Make a comparison request">
+    Here's a real example comparing different people:
+    
+    <CodeGroup>
+      ```bash curl
+      curl -X POST http://localhost:8080/compare \
+        -H "Content-Type: application/json" \
+        -d '{
+          "target_url": "https://static.wikia.nocookie.net/amazingspiderman/images/3/33/Tobey_Maguire_Infobox.png",
+          "people": [
+            {
+              "name": "Tobey Maguire",
+              "image_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQqiVCCW7eH5Q_8q4VULShU7O8QnOgp7Us2RBNhAlnesh2_iho_D1Toosuxj_x66J1w8ks&usqp=CAU"
+            },
+            {
+              "name": "Tom Holland",
+              "image_url": "https://static.wikia.nocookie.net/marvelcinematicuniverse/images/2/2f/Tom_Holland.jpg"
+            }
+          ]
+        }'
+      ```
+      
+      ```javascript fetch
+      const response = await fetch('http://localhost:8080/compare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target_url: 'https://static.wikia.nocookie.net/amazingspiderman/images/3/33/Tobey_Maguire_Infobox.png',
+          people: [
+            {
+              name: 'Tobey Maguire',
+              image_url: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQqiVCCW7eH5Q_8q4VULShU7O8QnOgp7Us2RBNhAlnesh2_iho_D1Toosuxj_x66J1w8ks&usqp=CAU'
+            },
+            {
+              name: 'Tom Holland',
+              image_url: 'https://static.wikia.nocookie.net/marvelcinematicuniverse/images/2/2f/Tom_Holland.jpg'
+            }
+          ]
+        })
+      });
+      
+      const matches = await response.json();
+      console.log(matches);
+      ```
+      
+      ```python requests
+      import requests
+      
+      response = requests.post('http://localhost:8080/compare', json={
+          'target_url': 'https://static.wikia.nocookie.net/amazingspiderman/images/3/33/Tobey_Maguire_Infobox.png',
+          'people': [
+              {
+                  'name': 'Tobey Maguire',
+                  'image_url': 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQqiVCCW7eH5Q_8q4VULShU7O8QnOgp7Us2RBNhAlnesh2_iho_D1Toosuxj_x66J1w8ks&usqp=CAU'
+              },
+              {
+                  'name': 'Tom Holland',
+                  'image_url': 'https://static.wikia.nocookie.net/marvelcinematicuniverse/images/2/2f/Tom_Holland.jpg'
+              }
+          ]
+      })
+      
+      matches = response.json()
+      print(matches)
+      ```
+      
+      ```go net/http
+      package main
+      
+      import (
+          "bytes"
+          "encoding/json"
+          "fmt"
+          "net/http"
+      )
+      
+      func main() {
+          payload := map[string]interface{}{
+              "target_url": "https://static.wikia.nocookie.net/amazingspiderman/images/3/33/Tobey_Maguire_Infobox.png",
+              "people": []map[string]string{
+                  {
+                      "name": "Tobey Maguire",
+                      "image_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQqiVCCW7eH5Q_8q4VULShU7O8QnOgp7Us2RBNhAlnesh2_iho_D1Toosuxj_x66J1w8ks&usqp=CAU",
+                  },
+                  {
+                      "name": "Tom Holland",
+                      "image_url": "https://static.wikia.nocookie.net/marvelcinematicuniverse/images/2/2f/Tom_Holland.jpg",
+                  },
+              },
+          }
+          
+          jsonData, _ := json.Marshal(payload)
+          resp, _ := http.Post("http://localhost:8080/compare", "application/json", bytes.NewBuffer(jsonData))
+          defer resp.Body.Close()
+          
+          var result map[string]interface{}
+          json.NewDecoder(resp.Body).Decode(&result)
+          fmt.Println(result)
+      }
+      ```
+    </CodeGroup>
+  </Step>
+  
+  <Step title="Interpret the response">
+    Iris returns matches sorted by probability (highest first):
+    
+    ```json
+    {
+      "matches": [
+        {
+          "name": "Tobey Maguire",
+          "probability": 87.3
+        }
+      ]
+    }
+    ```
+    
+    **Response fields:**
+    - `matches` - Array of matching people (empty if no matches)
+    - `name` - The identifier from your request
+    - `probability` - Match confidence (0-100)
+    
+    <Info>
+      Only matches with similarity > 36.3% are returned. This threshold is based on the SFace model's recommendation for positive matches.
+    </Info>
+  </Step>
+</Steps>
+
+## Using Base64 Data URIs
+
+Instead of image URLs, you can send images directly as Base64-encoded data URIs:
+
+<CodeGroup>
+  ```bash Convert image to Base64
+  # macOS/Linux
+  base64 -i image.jpg | awk '{printf "data:image/jpeg;base64,%s", $0}'
+  
+  # Or use Python
+  python3 -c "import base64; print('data:image/jpeg;base64,' + base64.b64encode(open('image.jpg', 'rb').read()).decode())"
+  ```
+  
+  ```javascript Browser
+  // Convert File to data URI
+  function fileToDataUri(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+  
+  // Usage
+  const input = document.querySelector('input[type="file"]');
+  const dataUri = await fileToDataUri(input.files[0]);
+  ```
+  
+  ```python Python
+  import base64
+  
+  def image_to_data_uri(filepath):
+      with open(filepath, 'rb') as f:
+          data = base64.b64encode(f.read()).decode()
+      return f'data:image/jpeg;base64,{data}'
+  
+  # Usage
+  data_uri = image_to_data_uri('patient.jpg')
+  ```
+</CodeGroup>
+
+Then use the data URI in your request:
+
+```json
+{
+  "target_url": "data:image/jpeg;base64,/9j/4AAQSkZJRg...",
+  "people": [
+    {
+      "name": "Patient-001",
+      "image_url": "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
+    }
+  ]
+}
+```
+
+<Tip>
+  Data URIs are useful when you already have images in memory or want to avoid external HTTP requests. However, they increase payload size significantly.
+</Tip>
+
+## Check API Statistics
+
+Monitor API usage with the `/stats` endpoint:
+
+```bash
+curl http://localhost:8080/stats
+```
+
+**Response:**
+```json
+{
+  "total_requests": 42,
+  "requests_last_second": 2,
+  "requests_last_minute": 15,
+  "requests_last_hour": 42
+}
+```
+
+This endpoint is useful for:
+- Monitoring traffic patterns
+- Debugging rate limit issues
+- Capacity planning
+- Health checks
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="OpenCV not found during compilation" icon="triangle-exclamation">
+    **Error:** `Could not find OpenCV library`
+    
+    **Solution:**
+    
+    <Tabs>
+      <Tab title="macOS">
+        ```bash
+        # Reinstall OpenCV
+        brew reinstall opencv
+        
+        # Set environment variable
+        export DYLD_LIBRARY_PATH="$(brew --prefix opencv)/lib:$DYLD_LIBRARY_PATH"
+        ```
+      </Tab>
+      <Tab title="Linux">
+        ```bash
+        # Install development headers
+        sudo apt install libopencv-dev pkg-config
+        
+        # Verify installation
+        pkg-config --modversion opencv4
+        ```
+      </Tab>
+    </Tabs>
+  </Accordion>
+  
+  <Accordion title="Port 8080 already in use" icon="triangle-exclamation">
+    **Error:** `Address already in use (os error 48)`
+    
+    **Solution:** Change the port in `src/main.rs:151`:
+    
+    ```rust
+    let port = 3000;  // Change from 8080 to another port
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
+    ```
+    
+    Then rebuild: `cargo run --release`
+  </Accordion>
+  
+  <Accordion title="ONNX models not found" icon="triangle-exclamation">
+    **Error:** `Failed to load model: face_detection_yunet_2023mar.onnx`
+    
+    **Solution:** Ensure models are in the project root:
+    
+    ```bash
+    ls -la *.onnx
+    ```
+    
+    Should show:
+    ```
+    face_detection_yunet_2023mar.onnx
+    face_recognition_sface_2021dec.onnx
+    ```
+    
+    If missing, re-run `./setup.sh` or download manually.
+  </Accordion>
+  
+  <Accordion title="Empty matches array" icon="triangle-exclamation">
+    **Issue:** `/compare` returns `{"matches": []}`
+    
+    **Possible causes:**
+    1. **No face detected:** Image quality too low, face too small, or heavily obscured
+    2. **Similarity too low:** Faces don't match (different people)
+    3. **Invalid image URL:** Download failed or returned non-image data
+    
+    **Debugging:**
+    ```bash
+    # Test with known matching images
+    curl -X POST http://localhost:8080/compare \
+      -H "Content-Type: application/json" \
+      -d '{...}'
+    ```
+    
+    Check that:
+    - Images contain clearly visible faces
+    - URLs are publicly accessible
+    - Images are in supported formats (JPEG, PNG, WebP)
+  </Accordion>
+  
+  <Accordion title="Rate limit errors (429)" icon="triangle-exclamation">
+    **Error:** `429 Too Many Requests`
+    
+    **Cause:** Exceeded 5 requests/second per IP (burst: 10)
+    
+    **Solution:** Implement exponential backoff:
+    
+    ```javascript
+    async function compareWithRetry(payload, maxRetries = 3) {
+      for (let i = 0; i < maxRetries; i++) {
+        const response = await fetch('http://localhost:8080/compare', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        
+        if (response.status === 429) {
+          const delay = Math.pow(2, i) * 1000;  // 1s, 2s, 4s
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+        
+        return await response.json();
+      }
+      throw new Error('Max retries exceeded');
+    }
+    ```
+    
+    Or adjust rate limits in `src/main.rs:128-129`:
+    ```rust
+    let quota = Quota::per_second(NonZeroU32::new(10).unwrap())  // Increase to 10/sec
+        .allow_burst(NonZeroU32::new(20).unwrap());  // Burst: 20
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+Now that Iris is running, explore advanced topics:
+
+<CardGroup cols={2}>
+  <Card title="API Reference" icon="book" href="/api/compare">
+    Complete documentation for all endpoints and request/response models
+  </Card>
+  
+  <Card title="Architecture Deep Dive" icon="diagram-project" href="/concepts/architecture">
+    Learn how Iris processes faces and maintains stateless design
+  </Card>
+  
+  <Card title="Docker Deployment" icon="docker" href="/setup/docker">
+    Deploy Iris as a containerized service for production
+  </Card>
+  
+  <Card title="Security Model" icon="shield-halved" href="/security/privacy-model">
+    Understand privacy guarantees and rate limiting
+  </Card>
+</CardGroup>
+
+<Note>
+  **Need help?** Check the [GitHub repository](https://github.com/crane04/iris) for issues and discussions, or review the [complete API reference](/api/compare).
 </Note>

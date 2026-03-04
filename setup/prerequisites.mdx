@@ -1,0 +1,386 @@
+---
+title: Prerequisites
+description: System requirements and dependencies for running Iris face recognition API
+---
+
+## Overview
+
+Before installing Iris, ensure your system meets the following requirements. Iris is built with Rust and leverages OpenCV for high-performance face detection and recognition, requiring specific system-level dependencies.
+
+## System Requirements
+
+<CardGroup cols={2}>
+  <Card title="CPU" icon="microchip">
+    Modern x86_64 or ARM64 processor
+    
+    2+ cores recommended for production
+  </Card>
+  <Card title="Memory" icon="memory">
+    Minimum 2GB RAM
+    
+    4GB+ recommended for concurrent requests
+  </Card>
+  <Card title="Storage" icon="hard-drive">
+    500MB for dependencies and models
+    
+    Additional space for build artifacts
+  </Card>
+  <Card title="Network" icon="network-wired">
+    Internet connection required
+    
+    For model downloads and image fetching
+  </Card>
+</CardGroup>
+
+## Required Dependencies
+
+### Rust Toolchain
+
+Iris requires Rust 2021 edition or later. Install via rustup:
+
+<Steps>
+  <Step title="Install rustup">
+    Download and install the official Rust toolchain manager:
+    
+    ```bash
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    ```
+    
+    Follow the on-screen prompts to complete installation.
+  </Step>
+  
+  <Step title="Configure your shell">
+    Add Rust to your PATH (automatically suggested by installer):
+    
+    ```bash
+    source $HOME/.cargo/env
+    ```
+  </Step>
+  
+  <Step title="Verify installation">
+    Confirm Rust is installed correctly:
+    
+    ```bash
+    rustc --version
+    cargo --version
+    ```
+    
+    Expected output:
+    ```
+    rustc 1.75.0 (or later)
+    cargo 1.75.0 (or later)
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  Iris uses Cargo.toml edition = "2021". Ensure your Rust version supports this edition (Rust 1.56+).
+</Note>
+
+### OpenCV 4.x
+
+OpenCV is the core computer vision library that powers Iris's face detection and recognition capabilities. Version 4.x is required.
+
+<Tabs>
+  <Tab title="macOS">
+    Install OpenCV via Homebrew:
+    
+    ```bash
+    brew install opencv
+    ```
+    
+    Verify installation:
+    
+    ```bash
+    brew list opencv
+    pkg-config --modversion opencv4
+    ```
+    
+    <Tip>
+      If you encounter linking issues, ensure pkg-config can find OpenCV:
+      ```bash
+      export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:$PKG_CONFIG_PATH"
+      ```
+    </Tip>
+  </Tab>
+  
+  <Tab title="Linux (Ubuntu/Debian)">
+    Install OpenCV development libraries:
+    
+    ```bash
+    sudo apt update
+    sudo apt install -y libopencv-dev clang llvm-dev libclang-dev pkg-config
+    ```
+    
+    Verify installation:
+    
+    ```bash
+    pkg-config --modversion opencv4
+    dpkg -l | grep libopencv
+    ```
+    
+    <Note>
+      The `clang` and `llvm-dev` packages are required for opencv-rust bindings compilation.
+    </Note>
+  </Tab>
+  
+  <Tab title="Linux (Fedora/RHEL)">
+    Install OpenCV using dnf:
+    
+    ```bash
+    sudo dnf install -y opencv-devel clang llvm-devel
+    ```
+    
+    Verify installation:
+    
+    ```bash
+    pkg-config --modversion opencv4
+    ```
+  </Tab>
+  
+  <Tab title="Windows">
+    Windows installation requires additional setup. Follow the comprehensive guide:
+    
+    1. Install Visual Studio 2019+ with C++ tools
+    2. Download OpenCV from [opencv.org](https://opencv.org/releases/)
+    3. Set environment variables:
+       ```powershell
+       $env:OPENCV_INCLUDE_PATHS = "C:\\opencv\\build\\include"
+       $env:OPENCV_LINK_PATHS = "C:\\opencv\\build\\x64\\vc16\\lib"
+       ```
+    
+    <Warning>
+      Windows support for opencv-rust can be complex. Refer to the [opencv-rust Windows guide](https://github.com/twistedfall/opencv-rust#windows) for detailed instructions.
+    </Warning>
+  </Tab>
+</Tabs>
+
+### Build Tools
+
+Additional build dependencies required for compilation:
+
+<AccordionGroup>
+  <Accordion title="LLVM and Clang">
+    Required for opencv-rust bindings generation.
+    
+    **macOS:**
+    ```bash
+    xcode-select --install
+    ```
+    
+    **Linux:**
+    ```bash
+    sudo apt install clang llvm-dev libclang-dev
+    ```
+    
+    **Verify:**
+    ```bash
+    clang --version
+    ```
+  </Accordion>
+  
+  <Accordion title="pkg-config">
+    Used to locate library paths during compilation.
+    
+    **macOS:**
+    ```bash
+    brew install pkg-config
+    ```
+    
+    **Linux:**
+    ```bash
+    sudo apt install pkg-config
+    ```
+    
+    **Verify:**
+    ```bash
+    pkg-config --version
+    ```
+  </Accordion>
+  
+  <Accordion title="curl">
+    Required for downloading AI models via setup script.
+    
+    **macOS/Linux:**
+    ```bash
+    # Usually pre-installed, verify:
+    curl --version
+    ```
+    
+    **Install if missing (Linux):**
+    ```bash
+    sudo apt install curl
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Rust Dependencies
+
+Iris uses the following Rust crates (automatically installed via Cargo):
+
+```toml Cargo.toml
+[dependencies]
+opencv = "0.98.1"              # OpenCV bindings
+reqwest = { version = "0.11", features = ["blocking"] }  # HTTP client
+anyhow = "1.0"                 # Error handling
+serde = { version = "1.0", features = ["derive"] }       # Serialization
+axum = "0.7"                   # Web framework
+tokio = { version = "1.0", features = ["full"] }         # Async runtime
+tower-http = { version = "0.5", features = ["cors"] }    # CORS middleware
+governor = "0.6"               # Rate limiting
+base64 = "0.21"                # Base64 encoding/decoding
+```
+
+<Note>
+  These dependencies will be automatically fetched when you run `cargo build`. No manual installation required.
+</Note>
+
+## AI Models
+
+Iris requires two ONNX models from OpenCV Zoo:
+
+<CardGroup cols={2}>
+  <Card title="YuNet (Face Detection)" icon="face-viewfinder">
+    **File:** `face_detection_yunet_2023mar.onnx`
+    
+    **Size:** ~360KB
+    
+    **Purpose:** Detects faces in images
+  </Card>
+  <Card title="SFace (Face Recognition)" icon="fingerprint">
+    **File:** `face_recognition_sface_2021dec.onnx`
+    
+    **Size:** ~41MB
+    
+    **Purpose:** Generates 128-dimensional face embeddings
+  </Card>
+</CardGroup>
+
+<Warning>
+  These models are **NOT** included in the repository due to their size. You must download them during installation (covered in the next section).
+</Warning>
+
+## Network Requirements
+
+### Port Availability
+
+Ensure port **8080** is available for the API server:
+
+```bash
+# Check if port is in use
+lsof -i :8080
+# or
+netstat -an | grep 8080
+```
+
+### Firewall Configuration
+
+If running in production, configure your firewall to allow:
+
+- **Inbound:** TCP port 8080 (or your configured port)
+- **Outbound:** HTTPS (443) for downloading models and fetching images
+
+## Optional: Docker
+
+If you prefer containerized deployment, ensure Docker is installed:
+
+```bash
+# Install Docker (Linux)
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+
+# Verify installation
+docker --version
+```
+
+<Tip>
+  Docker deployment simplifies dependency management. See the [Docker Setup](/setup/docker) guide for containerized installation.
+</Tip>
+
+## Verification Checklist
+
+Before proceeding to installation, verify all prerequisites:
+
+<Steps>
+  <Step title="Rust installed">
+    ```bash
+    rustc --version && cargo --version
+    ```
+  </Step>
+  
+  <Step title="OpenCV installed">
+    ```bash
+    pkg-config --modversion opencv4
+    ```
+  </Step>
+  
+  <Step title="Build tools available">
+    ```bash
+    clang --version && pkg-config --version
+    ```
+  </Step>
+  
+  <Step title="Network connectivity">
+    ```bash
+    curl -I https://github.com
+    ```
+  </Step>
+</Steps>
+
+<Check>
+  All prerequisites met? Proceed to [Installation](/setup/installation) to set up Iris.
+</Check>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="opencv-rust compilation fails">
+    **Symptoms:** Errors during `cargo build` related to OpenCV bindings.
+    
+    **Solutions:**
+    - Verify OpenCV 4.x is installed: `pkg-config --modversion opencv4`
+    - Ensure LLVM/Clang is installed: `clang --version`
+    - Set pkg-config path manually:
+      ```bash
+      export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
+      ```
+    - Check opencv-rust troubleshooting: https://github.com/twistedfall/opencv-rust#troubleshooting
+  </Accordion>
+  
+  <Accordion title="Rust installation issues">
+    **Symptoms:** `rustc` or `cargo` commands not found.
+    
+    **Solutions:**
+    - Reload shell configuration: `source $HOME/.cargo/env`
+    - Add to ~/.bashrc or ~/.zshrc:
+      ```bash
+      export PATH="$HOME/.cargo/bin:$PATH"
+      ```
+    - Reinstall rustup: https://rustup.rs/
+  </Accordion>
+  
+  <Accordion title="Port 8080 already in use">
+    **Symptoms:** "Address already in use" error when starting Iris.
+    
+    **Solutions:**
+    - Find the process using the port:
+      ```bash
+      lsof -i :8080
+      ```
+    - Kill the process or change Iris's port in `main.rs:151`:
+      ```rust
+      let port = 3000; // Change from 8080
+      ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Installation Guide" icon="download" href="/setup/installation">
+    Clone the repository and download AI models
+  </Card>
+  <Card title="Docker Setup" icon="docker" href="/setup/docker">
+    Alternative containerized deployment
+  </Card>
+</CardGroup>

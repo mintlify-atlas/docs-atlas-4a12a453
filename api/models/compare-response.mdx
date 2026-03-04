@@ -1,0 +1,76 @@
+---
+title: CompareResponse
+description: Response model containing face comparison results
+---
+
+## Overview
+
+The `CompareResponse` model represents the output from the face comparison endpoint. It contains an array of match results with probability scores for each person compared against the target face.
+
+## Rust Definition
+
+```rust
+#[derive(Serialize)]
+pub struct CompareResponse {
+    pub matches: Vec<MatchResult>,
+}
+```
+
+## TypeScript Definition
+
+```typescript
+interface CompareResponse {
+  matches: MatchResult[];
+}
+```
+
+## Fields
+
+<ResponseField name="matches" type="MatchResult[]" required>
+  An array of match results containing the name and probability score for each person compared. The array is typically sorted by probability in descending order, with the highest matches first.
+</ResponseField>
+
+## Example JSON
+
+```json
+{
+  "matches": [
+    {
+      "name": "Jane Smith",
+      "probability": 0.9823
+    },
+    {
+      "name": "John Doe",
+      "probability": 0.4521
+    },
+    {
+      "name": "Bob Johnson",
+      "probability": 0.2134
+    }
+  ]
+}
+```
+
+## Response Interpretation
+
+### Probability Scores
+
+The probability values range from 0.0 to 1.0:
+- **0.9 - 1.0**: Very high confidence match - likely the same person
+- **0.7 - 0.9**: Strong match - high probability of being the same person
+- **0.5 - 0.7**: Moderate match - some similarity but less certain
+- **0.0 - 0.5**: Low match - likely different people
+
+### Interpreting Results
+
+The matches array includes all people from the request, each with their computed similarity score. Higher probability values indicate stronger facial similarity to the target image.
+
+For production use cases, consider:
+- Setting a probability threshold (e.g., 0.7) for positive matches
+- Using the highest probability match when identifying a single person
+- Accounting for image quality, lighting, and angle variations
+
+## Related Models
+
+- [MatchResult](/api/models/match-result) - Individual match result model
+- [CompareRequest](/api/models/compare-request) - Request model used to generate this response

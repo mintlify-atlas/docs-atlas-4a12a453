@@ -1,0 +1,235 @@
+---
+title: 'Architecture'
+description: 'Understand the system design and core components of Iris'
+icon: 'sitemap'
+---
+
+## Overview
+
+Iris is built as a **stateless, high-performance face recognition API** using Rust, Axum web framework, and OpenCV. The architecture is designed for speed, security, and scalability with zero data persistence.
+
+<Note>
+Every request is processed independently in RAM with no database, no file storage, and no logging of user images.
+</Note>
+
+## System Components
+
+The application is structured around three core modules:
+
+<CardGroup cols={3}>
+  <Card title="FaceEngine" icon="brain">
+    Neural network models for face detection and recognition
+  </Card>
+  <Card title="Request Handler" icon="server">
+    HTTP endpoints and request processing logic
+  </Card>
+  <Card title="Stats & Rate Limiting" icon="gauge">
+    Performance monitoring and API protection
+  </Card>
+</CardGroup>
+
+### Application State
+
+The `AppState` struct (`main.rs:28-33`) holds shared components:
+
+```rust main.rs
+#[derive(Clone)]
+struct AppState {
+    engine: Arc<Mutex<FaceEngine>>,
+    limiter: SharedRateLimiter,
+    stats: RequestStats,
+}
+```
+
+- **engine**: Thread-safe reference to the face processing engine
+- **limiter**: IP-based rate limiter (5 req/sec, burst of 10)
+- **stats**: Real-time request metrics
+
+## Data Flow
+
+<Steps>
+  <Step title="Request Arrival">
+    Client sends POST request to `/compare` with target face URL and list of people to match against
+  </Step>
+  
+  <Step title="Rate Limiting">
+    Middleware checks IP-based quota before processing (`main.rs:35-45`)
+  </Step>
+  
+  <Step title="Image Download">
+    Both data URIs and HTTP URLs are decoded into OpenCV Mat objects (`main.rs:47-60`)
+  </Step>
+  
+  <Step title="Face Detection">
+    YuNet detector locates faces in both target and candidate images (`face.rs:26-28`)
+  </Step>
+  
+  <Step title="Face Recognition">
+    SFace recognizer extracts 128-dimensional embeddings and computes cosine similarity (`face.rs:32-36`)
+  </Step>
+  
+  <Step title="Response">
+    Matches above 0.363 threshold are returned sorted by probability (`main.rs:104-116`)
+  </Step>
+</Steps>
+
+### Visual Flow
+
+```mermaid
+graph LR
+    A[Client] --> B[Rate Limiter]
+    B --> C[Download Images]
+    C --> D[Face Detection]
+    D --> E[Extract Embeddings]
+    E --> F[Compare Vectors]
+    F --> G[Return Matches]
+    G --> A
+```
+
+## Request Processing
+
+The `/compare` endpoint (`main.rs:62-117`) follows this logic:
+
+<Accordion title="Step 1: Target Image Processing">
+```rust main.rs
+let target_img = match download_and_decode(&payload.target_url).await {
+    Ok(img) => img,
+    Err(_) => return Json(CompareResponse { matches: vec![] }),
+};
+```
+If the target URL is invalid or image is corrupted, return empty matches immediately.
+</Accordion>
+
+<Accordion title="Step 2: Extract Target Embedding">
+```rust main.rs
+let mut guard = state.engine.lock().await;
+let (det, rec) = unsafe {
+    (
+        &mut *(guard.detector.as_raw_mut() as *mut objdetect::FaceDetectorYN),
+        &mut *(guard.recognizer.as_raw_mut() as *mut objdetect::FaceRecognizerSF)
+    )
+};
+if let Ok(Some(emb)) = get_embedding(&target_img, det, rec) {
+    target_embedding = Some(emb);
+}
+```
+Lock the FaceEngine and extract the 128-dimensional feature vector from the target face.
+</Accordion>
+
+<Accordion title="Step 3: Compare Against All Candidates">
+```rust main.rs
+for person in payload.people {
+    if let Ok(p_img) = download_and_decode(&person.image_url).await {
+        // ... extract embedding and compare
+        if let Ok(score) = rec.match_(&t_emb, &p_emb, objdetect::FaceRecognizerSF_DisType::FR_COSINE as i32) {
+            if score > 0.363 {
+                results.push(MatchResult {
+                    name: person.name,
+                    probability: (score.max(0.0) * 100.0).round(),
+                });
+            }
+        }
+    }
+}
+```
+Iterate through all candidates, compute similarity scores, and collect matches above threshold.
+</Accordion>
+
+## Concurrency Model
+
+<Info>
+Iris uses **Tokio async runtime** for handling concurrent requests efficiently.
+</Info>
+
+The FaceEngine is protected by an `Arc<Mutex<FaceEngine>>` to allow safe shared access across async tasks:
+
+- **Arc**: Enables multiple ownership across threads
+- **Mutex**: Ensures only one request processes face recognition at a time
+- **async/await**: Allows other tasks to run while waiting for I/O operations
+
+### Why Mutex Instead of RwLock?
+
+Since face recognition modifies internal state in OpenCV models, we use `Mutex` rather than `RwLock`. All operations require mutable access to the detector and recognizer.
+
+## Performance Optimizations
+
+<CardGroup cols={2}>
+  <Card title="Zero Allocation" icon="bolt">
+    Images are decoded directly into OpenCV Mat without intermediate buffers
+  </Card>
+  <Card title="ONNX Runtime" icon="microchip">
+    Pre-trained models use ONNX format for fast inference
+  </Card>
+  <Card title="Connection Pooling" icon="network-wired">
+    Reqwest client reuses HTTP connections when downloading images
+  </Card>
+  <Card title="Early Returns" icon="forward-fast">
+    Invalid images or failed detections exit immediately
+  </Card>
+</CardGroup>
+
+## Security Architecture
+
+### Rate Limiting
+
+Implemented using the `governor` crate with per-IP quotas (`main.rs:127-130`):
+
+```rust main.rs
+let quota = Quota::per_second(NonZeroU32::new(5).unwrap())
+    .allow_burst(NonZeroU32::new(10).unwrap());
+let limiter: SharedRateLimiter = Arc::new(RateLimiter::keyed(quota));
+```
+
+- **5 requests/second** sustained rate
+- **Burst of 10** for occasional spikes
+- **Per IP address** tracking
+
+### CORS Configuration
+
+```rust main.rs
+let cors = CorsLayer::new()
+    .allow_origin(Any)
+    .allow_methods([Method::POST, Method::GET])
+    .allow_headers([header::CONTENT_TYPE]);
+```
+
+<Warning>
+The API allows requests from any origin. In production, restrict `.allow_origin()` to specific domains.
+</Warning>
+
+## Deployment Architecture
+
+Iris runs as a single binary with all dependencies:
+
+```rust main.rs
+let port = 8080;
+let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
+axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
+```
+
+<Tip>
+Deploy behind a reverse proxy (nginx, Caddy) for TLS termination and additional security layers.
+</Tip>
+
+## Error Handling Strategy
+
+The API follows a **graceful degradation** pattern:
+
+1. **Invalid target image**: Returns empty matches array
+2. **Invalid candidate image**: Skips that candidate, continues processing
+3. **No face detected**: Treats as non-match, continues
+4. **Rate limit exceeded**: Returns `429 TOO_MANY_REQUESTS`
+
+This ensures partial failures don't crash the entire request.
+
+## Module Structure
+
+```
+src/
+├── main.rs        # HTTP server, routing, middleware
+├── face.rs        # Face detection and recognition logic
+├── models.rs      # Request/response data structures
+└── stats.rs       # Request statistics tracking
+```
+
+Each module has a single, well-defined responsibility following separation of concerns principles.

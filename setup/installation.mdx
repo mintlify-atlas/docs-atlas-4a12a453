@@ -1,0 +1,585 @@
+---
+title: Installation
+description: Step-by-step guide to install and configure Iris face recognition API locally
+---
+
+## Overview
+
+This guide walks through installing Iris on your local machine. The installation process includes cloning the repository, downloading AI models, building the Rust binary, and starting the API server.
+
+<Note>
+  Ensure you've completed all [Prerequisites](/setup/prerequisites) before proceeding.
+</Note>
+
+## Installation Steps
+
+<Steps>
+  <Step title="Clone the Repository">
+    Download the Iris source code from GitHub:
+    
+    ```bash
+    git clone https://github.com/your-username/iris.git
+    cd iris
+    ```
+    
+    Verify the directory structure:
+    
+    ```bash
+    ls -la
+    ```
+    
+    Expected output:
+    ```
+    Cargo.toml
+    Cargo.lock
+    Dockerfile
+    setup.sh
+    src/
+    LICENSE
+    readme.md
+    ```
+  </Step>
+  
+  <Step title="Download AI Models">
+    Iris requires two ONNX models from OpenCV Zoo. Use the provided setup script:
+    
+    ```bash
+    chmod +x setup.sh
+    ./setup.sh
+    ```
+    
+    <Accordion title="What does setup.sh do?">
+      The script downloads the following models:
+      
+      ```bash setup.sh
+      #!/bin/bash
+
+      echo "Initializing Iris Environment..."
+
+      # Download YuNet
+      if [ ! -f "face_detection_yunet_2023mar.onnx" ]; then
+          echo "Downloading YuNet Detection Model..."
+          curl -L https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx -o face_detection_yunet_2023mar.onnx
+      else
+          echo "YuNet already exists."
+      fi
+
+      # Download SFace
+      if [ ! -f "face_recognition_sface_2021dec.onnx" ]; then
+          echo "Downloading SFace Recognition Model..."
+          curl -L https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx -o face_recognition_sface_2021dec.onnx
+      else
+          echo "SFace already exists."
+      fi
+
+      echo "Setup complete. Run 'cargo run --release' to start Iris."
+      ```
+      
+      The script:
+      - Checks if models already exist (safe to re-run)
+      - Downloads YuNet face detection model (~360KB)
+      - Downloads SFace face recognition model (~41MB)
+      - Places models in the project root directory
+    </Accordion>
+    
+    <Accordion title="Manual model download">
+      If the script fails or you prefer manual installation:
+      
+      ```bash
+      # Face Detection (YuNet)
+      curl -L https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx \
+        -o face_detection_yunet_2023mar.onnx
+
+      # Face Recognition (SFace)
+      curl -L https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx \
+        -o face_recognition_sface_2021dec.onnx
+      ```
+      
+      Verify downloads:
+      ```bash
+      ls -lh *.onnx
+      ```
+      
+      Expected output:
+      ```
+      -rw-r--r-- 1 user user 362K face_detection_yunet_2023mar.onnx
+      -rw-r--r-- 1 user user  41M face_recognition_sface_2021dec.onnx
+      ```
+    </Accordion>
+    
+    <Warning>
+      The models **must** be in the project root directory where you run `cargo run`. The paths are hardcoded in `src/face.rs:12-15`.
+    </Warning>
+  </Step>
+  
+  <Step title="Build the Project">
+    Compile Iris in release mode for optimal performance:
+    
+    ```bash
+    cargo build --release
+    ```
+    
+    <Info>
+      First build may take 5-10 minutes as Cargo compiles all dependencies, including OpenCV bindings. Subsequent builds will be faster.
+    </Info>
+    
+    Expected output:
+    ```
+    Compiling opencv 0.98.1
+    Compiling axum 0.7.0
+    Compiling tokio 1.0.0
+    ...
+    Finished release [optimized] target(s) in 8m 32s
+    ```
+    
+    <Accordion title="Troubleshooting build errors">
+      **OpenCV linking errors:**
+      ```
+      error: failed to run custom build command for `opencv`
+      ```
+      
+      Solutions:
+      - Verify OpenCV is installed: `pkg-config --modversion opencv4`
+      - Set pkg-config path:
+        ```bash
+        export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
+        ```
+      - On macOS with Homebrew:
+        ```bash
+        export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:$PKG_CONFIG_PATH"
+        ```
+      
+      **LLVM/Clang errors:**
+      ```
+      error: failed to find llvm-config
+      ```
+      
+      Solution:
+      ```bash
+      # Linux
+      sudo apt install llvm-dev libclang-dev
+      
+      # macOS
+      xcode-select --install
+      ```
+    </Accordion>
+  </Step>
+  
+  <Step title="Run the API Server">
+    Start Iris in release mode:
+    
+    ```bash
+    cargo run --release
+    ```
+    
+    Expected output:
+    ```
+    Initializing Iris Face AI...
+    Iris API running on http://localhost:8080
+    ```
+    
+    <Check>
+      The API is now running! Keep this terminal window open.
+    </Check>
+  </Step>
+</Steps>
+
+## Configuration
+
+### Model Paths
+
+Iris loads models from the project root by default. The paths are defined in `src/face.rs`:
+
+```rust src/face.rs
+pub fn new() -> Result<Self> {
+    let detector = objdetect::FaceDetectorYN::create(
+        "face_detection_yunet_2023mar.onnx",  // Relative to working directory
+        "", 
+        core::Size::new(320, 320), 
+        0.9,    // Score threshold
+        0.3,    // NMS threshold
+        5000,   // Top K
+        0, 0
+    )?;
+    let recognizer = objdetect::FaceRecognizerSF::create(
+        "face_recognition_sface_2021dec.onnx", // Relative to working directory
+        "", 
+        0, 0
+    )?;
+    Ok(Self { detector, recognizer })
+}
+```
+
+<Tip>
+  To use absolute paths, modify these strings in `src/face.rs:12,15` to point to your model directory.
+</Tip>
+
+### Server Port
+
+The default port is **8080**. To change it, edit `src/main.rs`:
+
+```rust src/main.rs
+let port = 8080; // Change this value
+let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
+println!("Iris API running on http://localhost:{}", port);
+```
+
+### Rate Limiting
+
+Iris includes IP-based rate limiting to prevent abuse:
+
+```rust src/main.rs
+// 5 requests/second per IP, burst up to 10
+let quota = Quota::per_second(NonZeroU32::new(5).unwrap())
+    .allow_burst(NonZeroU32::new(10).unwrap());
+let limiter: SharedRateLimiter = Arc::new(RateLimiter::keyed(quota));
+```
+
+Adjust these values in `src/main.rs:128-129` based on your needs.
+
+### CORS Policy
+
+CORS is configured to allow all origins by default:
+
+```rust src/main.rs
+let cors = CorsLayer::new()
+    .allow_origin(Any)
+    .allow_methods([Method::POST, Method::GET])
+    .allow_headers([header::CONTENT_TYPE]);
+```
+
+<Warning>
+  In production, restrict CORS to specific origins:
+  ```rust
+  .allow_origin("https://yourdomain.com".parse::<HeaderValue>().unwrap())
+  ```
+</Warning>
+
+## Testing the Installation
+
+### Health Check
+
+Verify the server is running:
+
+```bash
+curl http://localhost:8080/health
+```
+
+Expected response:
+```
+OK
+```
+
+### Face Comparison Test
+
+Test the `/compare` endpoint with sample images:
+
+```bash
+curl -X POST http://localhost:8080/compare \
+  -H "Content-Type: application/json" \
+  -d '{
+    "target_url": "https://static.wikia.nocookie.net/amazingspiderman/images/3/33/Tobey_Maguire_Infobox.png",
+    "people": [
+      {
+        "name": "Maguire",
+        "image_url": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQqiVCCW7eH5Q_8q4VULShU7O8QnOgp7Us2RBNhAlnesh2_iho_D1Toosuxj_x66J1w8ks&usqp=CAU"
+      },
+      {
+        "name": "Tom",
+        "image_url": "https://static.wikia.nocookie.net/marvelcinematicuniverse/images/2/2f/Tom_Holland.jpg"
+      }
+    ]
+  }'
+```
+
+Expected response:
+```json
+{
+  "matches": [
+    {
+      "name": "Maguire",
+      "probability": 87.0
+    }
+  ]
+}
+```
+
+<Accordion title="Understanding the response">
+  - **matches**: Array of people whose similarity score exceeds threshold (0.363)
+  - **name**: Identifier from the request
+  - **probability**: Cosine similarity score × 100 (higher = more similar)
+  - Empty array if no faces detected or no matches above threshold
+</Accordion>
+
+### Request Statistics
+
+Check API usage metrics:
+
+```bash
+curl http://localhost:8080/stats
+```
+
+Expected response:
+```json
+{
+  "total_requests": 1,
+  "requests_per_second": 0.05
+}
+```
+
+## Running in Development Mode
+
+For faster compilation during development:
+
+```bash
+cargo run
+```
+
+<Warning>
+  Development mode (`cargo run`) is **significantly slower** at runtime. Always use `cargo run --release` for production or performance testing.
+</Warning>
+
+## Project Structure
+
+Understanding the codebase:
+
+```
+iris/
+├── Cargo.toml                          # Rust dependencies and metadata
+├── Cargo.lock                          # Locked dependency versions
+├── setup.sh                            # Model download script
+├── Dockerfile                          # Container build instructions
+├── face_detection_yunet_2023mar.onnx   # YuNet model (downloaded)
+├── face_recognition_sface_2021dec.onnx # SFace model (downloaded)
+└── src/
+    ├── main.rs                         # API server, routing, middleware
+    ├── face.rs                         # FaceEngine, model loading, embeddings
+    ├── models.rs                       # Request/response data structures
+    └── stats.rs                        # Request statistics tracking
+```
+
+<AccordionGroup>
+  <Accordion title="src/main.rs">
+    Core API server with:
+    - Axum web framework setup
+    - Rate limiting middleware (5 req/s per IP)
+    - CORS configuration
+    - `/compare` endpoint handler
+    - `/stats` and `/health` endpoints
+    - Image download and Base64 data URI support
+  </Accordion>
+  
+  <Accordion title="src/face.rs">
+    Face recognition engine:
+    - `FaceEngine` struct managing YuNet detector and SFace recognizer
+    - Model initialization with hardcoded paths
+    - `get_embedding()` function for face detection and feature extraction
+    - Returns 128-dimensional vectors for similarity comparison
+  </Accordion>
+  
+  <Accordion title="src/models.rs">
+    Data structures for API requests and responses:
+    - `CompareRequest`: target image + array of people
+    - `CompareResponse`: array of matches with probabilities
+    - `Person`, `MatchResult`, etc.
+  </Accordion>
+  
+  <Accordion title="src/stats.rs">
+    Request tracking:
+    - Thread-safe request counter
+    - Requests per second calculation
+    - Exposed via `/stats` endpoint
+  </Accordion>
+</AccordionGroup>
+
+## Environment Variables
+
+Iris does not currently use environment variables. Configuration is done through:
+
+1. **Code modifications** (port, rate limits, CORS)
+2. **Model file placement** (working directory)
+3. **Cargo.toml** (dependency versions)
+
+<Tip>
+  Consider adding `.env` support for production deployments using the `dotenv` crate.
+</Tip>
+
+## Performance Optimization
+
+### Release Build
+
+Always use release mode for production:
+
+```bash
+cargo build --release
+./target/release/iris
+```
+
+Release builds enable:
+- Compiler optimizations (-O3 equivalent)
+- Inlining and dead code elimination
+- 10-100x faster than debug builds
+
+### System Tuning
+
+<Tabs>
+  <Tab title="Linux">
+    Increase file descriptor limits:
+    
+    ```bash
+    ulimit -n 4096
+    ```
+    
+    For persistent changes, edit `/etc/security/limits.conf`:
+    ```
+    * soft nofile 4096
+    * hard nofile 8192
+    ```
+  </Tab>
+  
+  <Tab title="macOS">
+    Increase file descriptor limits:
+    
+    ```bash
+    ulimit -n 4096
+    ```
+    
+    For persistent changes, create `/Library/LaunchDaemons/limit.maxfiles.plist`.
+  </Tab>
+</Tabs>
+
+### Tokio Runtime
+
+Iris uses Tokio with `features = ["full"]` for async I/O. Adjust worker threads via environment variable:
+
+```bash
+TOKIO_WORKER_THREADS=8 cargo run --release
+```
+
+## Security Considerations
+
+<Warning>
+  **Default configuration is insecure for production.** Iris prioritizes developer experience over security.
+</Warning>
+
+### Recommended Hardening
+
+1. **Restrict CORS origins** (see Configuration section)
+2. **Enable HTTPS** using a reverse proxy (nginx, Caddy)
+3. **Add authentication** middleware for API access
+4. **Implement request validation** (image size limits, URL allowlisting)
+5. **Run as non-root user** in production environments
+6. **Use environment variables** for sensitive configuration
+
+### Data Privacy
+
+Iris is **stateless by design**:
+
+- Images are processed in RAM only
+- No data persists to disk
+- Face embeddings are computed and immediately discarded
+- No logging of biometric data
+
+<Check>
+  This architecture ensures GDPR/HIPAA compliance for biometric data processing.
+</Check>
+
+## Updating Iris
+
+To update to the latest version:
+
+```bash
+git pull origin main
+cargo build --release
+```
+
+Update Rust dependencies:
+
+```bash
+cargo update
+cargo build --release
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Models not found error">
+    **Symptoms:**
+    ```
+    thread 'main' panicked at 'called `Result::unwrap()` on an `Err` value'
+    ```
+    
+    **Cause:** ONNX models not in working directory.
+    
+    **Solution:**
+    ```bash
+    # Ensure models are in project root
+    ls -la *.onnx
+    
+    # Re-run setup if missing
+    ./setup.sh
+    ```
+  </Accordion>
+  
+  <Accordion title="Port already in use">
+    **Symptoms:**
+    ```
+    Error: Address already in use (os error 48)
+    ```
+    
+    **Solution:**
+    ```bash
+    # Find process using port 8080
+    lsof -i :8080
+    kill -9 <PID>
+    
+    # Or change port in src/main.rs
+    ```
+  </Accordion>
+  
+  <Accordion title="Image download failures">
+    **Symptoms:** Empty `matches` array for valid faces.
+    
+    **Causes:**
+    - Network connectivity issues
+    - Invalid image URLs
+    - HTTPS certificate errors
+    - Rate limiting by image host
+    
+    **Solution:**
+    - Test URLs in browser first
+    - Use data URIs for local testing
+    - Check firewall/proxy settings
+  </Accordion>
+  
+  <Accordion title="Rate limit errors (429)">
+    **Symptoms:**
+    ```
+    HTTP 429 Too Many Requests
+    ```
+    
+    **Cause:** Exceeded 5 requests/second from single IP.
+    
+    **Solution:**
+    - Wait 1 second between requests
+    - Increase quota in `src/main.rs:128`
+    - Use multiple IPs for load testing
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Reference" icon="code" href="/api/compare">
+    Learn about available endpoints and request formats
+  </Card>
+  <Card title="Docker Deployment" icon="docker" href="/setup/docker">
+    Deploy Iris in a containerized environment
+  </Card>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Build your first face recognition integration
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Understand how Iris processes face recognition
+  </Card>
+</CardGroup>

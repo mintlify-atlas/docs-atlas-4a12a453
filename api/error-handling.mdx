@@ -1,0 +1,622 @@
+---
+title: 'Error Handling'
+description: 'Understand API error responses, status codes, and troubleshooting strategies'
+icon: 'triangle-exclamation'
+---
+
+## Overview
+
+The Iris API uses standard HTTP status codes and structured response patterns to communicate errors. Understanding these patterns is essential for building robust integrations.
+
+## HTTP Status Codes
+
+The API returns the following status codes:
+
+<ResponseField name="200 OK" type="Success">
+  Request processed successfully. Returns a JSON response with match results.
+</ResponseField>
+
+<ResponseField name="429 Too Many Requests" type="Rate Limit">
+  Rate limit exceeded for your IP address. Slow down request frequency.
+</ResponseField>
+
+<ResponseField name="500 Internal Server Error" type="Server Error">
+  Unexpected server error. Contact support if persistent.
+</ResponseField>
+
+### Status Code Reference
+
+| Code | Meaning | Description | Action Required |
+|------|---------|-------------|----------------|
+| **200** | OK | Request successful, results returned | None |
+| **429** | Too Many Requests | Rate limit exceeded | Implement backoff, reduce frequency |
+| **500** | Internal Server Error | Server-side processing failure | Retry with exponential backoff |
+
+## Rate Limiting (429)
+
+<Warning>
+  The API enforces strict rate limits to ensure fair usage and prevent abuse.
+</Warning>
+
+### Rate Limit Configuration
+
+The API implements per-IP rate limiting with the following parameters:
+
+```rust
+// From main.rs:127-129
+let quota = Quota::per_second(NonZeroU32::new(5).unwrap())
+    .allow_burst(NonZeroU32::new(10).unwrap());
+```
+
+**Limits:**
+- **Sustained Rate**: 5 requests per second per IP address
+- **Burst Allowance**: Up to 10 requests in a short burst
+- **Scope**: All endpoints (`/compare`, `/stats`, `/health`)
+- **Enforcement**: IP-based using the Governor library
+
+### Rate Limit Response
+
+When rate limited, you'll receive:
+
+```http
+HTTP/1.1 429 Too Many Requests
+```
+
+**Response Body:** Empty (no JSON payload)
+
+<Note>
+  The API returns only the status code without additional error details. Your client must detect the 429 status and implement appropriate retry logic.
+</Note>
+
+### Handling Rate Limits
+
+Implement these strategies to handle rate limiting gracefully:
+
+<CodeGroup>
+```javascript JavaScript (Exponential Backoff)
+class IrisClient {
+  constructor(baseUrl) {
+    this.baseUrl = baseUrl;
+    this.maxRetries = 3;
+  }
+
+  async compareWithRetry(targetUrl, people, retryCount = 0) {
+    try {
+      const response = await fetch(`${this.baseUrl}/compare`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_url: targetUrl, people })
+      });
+
+      if (response.status === 429) {
+        if (retryCount < this.maxRetries) {
+          // Exponential backoff: 1s, 2s, 4s
+          const delay = Math.pow(2, retryCount) * 1000;
+          console.log(`Rate limited. Retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          return this.compareWithRetry(targetUrl, people, retryCount + 1);
+        }
+        throw new Error('Rate limit exceeded after max retries');
+      }
+
+      return await response.json();
+    } catch (error) {
+      throw new Error(`API request failed: ${error.message}`);
+    }
+  }
+}
+
+// Usage
+const client = new IrisClient('http://localhost:8080');
+try {
+  const result = await client.compareWithRetry(
+    'https://example.com/photo.jpg',
+    [{ name: 'John Doe', image_url: 'https://example.com/john.jpg' }]
+  );
+  console.log('Matches:', result.matches);
+} catch (error) {
+  console.error('Error:', error.message);
+}
+```
+
+```python Python (Rate Limit Queue)
+import time
+import requests
+from typing import List, Dict
+from dataclasses import dataclass
+
+@dataclass
+class Person:
+    name: str
+    image_url: str
+
+class IrisClient:
+    def __init__(self, base_url: str, requests_per_second: float = 4.5):
+        self.base_url = base_url
+        self.min_interval = 1.0 / requests_per_second  # Stay under 5 req/s
+        self.last_request_time = 0
+    
+    def _rate_limit(self):
+        """Ensure minimum interval between requests"""
+        elapsed = time.time() - self.last_request_time
+        if elapsed < self.min_interval:
+            time.sleep(self.min_interval - elapsed)
+        self.last_request_time = time.time()
+    
+    def compare(self, target_url: str, people: List[Dict], max_retries: int = 3) -> Dict:
+        """Compare with automatic rate limiting and retry"""
+        for attempt in range(max_retries):
+            self._rate_limit()
+            
+            response = requests.post(
+                f"{self.base_url}/compare",
+                json={
+                    "target_url": target_url,
+                    "people": people
+                }
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+            elif response.status_code == 429:
+                backoff = (2 ** attempt) * 1.0  # 1s, 2s, 4s
+                print(f"Rate limited. Waiting {backoff}s before retry...")
+                time.sleep(backoff)
+            else:
+                response.raise_for_status()
+        
+        raise Exception("Rate limit exceeded after max retries")
+
+# Usage
+client = IrisClient("http://localhost:8080")
+result = client.compare(
+    "https://example.com/target.jpg",
+    [{"name": "Alice", "image_url": "https://example.com/alice.jpg"}]
+)
+print(f"Matches: {result['matches']}")
+```
+
+```bash cURL (Manual Retry)
+#!/bin/bash
+
+API_URL="http://localhost:8080/compare"
+MAX_RETRIES=3
+RETRY_COUNT=0
+
+while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+  HTTP_CODE=$(curl -s -o response.json -w "%{http_code}" \
+    -X POST "$API_URL" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "target_url": "https://example.com/photo.jpg",
+      "people": [
+        {"name": "John", "image_url": "https://example.com/john.jpg"}
+      ]
+    }')
+  
+  if [ $HTTP_CODE -eq 200 ]; then
+    echo "Success!"
+    cat response.json
+    exit 0
+  elif [ $HTTP_CODE -eq 429 ]; then
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    DELAY=$((2 ** RETRY_COUNT))
+    echo "Rate limited. Retrying in ${DELAY}s..."
+    sleep $DELAY
+  else
+    echo "Error: HTTP $HTTP_CODE"
+    exit 1
+  fi
+done
+
+echo "Failed after $MAX_RETRIES retries"
+exit 1
+```
+</CodeGroup>
+
+### Best Practices for Rate Limiting
+
+<Steps>
+  <Step title="Stay Under the Limit">
+    Design your client to send no more than 4-5 requests per second, leaving headroom for burst traffic.
+  </Step>
+  
+  <Step title="Implement Exponential Backoff">
+    When receiving 429 responses, increase retry delays exponentially (1s, 2s, 4s, 8s).
+  </Step>
+  
+  <Step title="Use Request Queuing">
+    Queue requests client-side and process them at a controlled rate.
+  </Step>
+  
+  <Step title="Monitor Rate Limit Errors">
+    Track 429 responses to detect patterns and optimize request timing.
+  </Step>
+  
+  <Step title="Consider Batch Processing">
+    If comparing multiple targets, batch them strategically to minimize request count.
+  </Step>
+</Steps>
+
+## Empty Match Responses
+
+The API returns successful responses (200 OK) even when no faces match or no faces are detected.
+
+### Empty Matches Scenarios
+
+<AccordionGroup>
+  <Accordion title="No Face Detected in Target Image" icon="user-slash">
+    When the target image contains no detectable faces:
+
+    ```json
+    {
+      "matches": []
+    }
+    ```
+
+    **Common Causes:**
+    - Image quality too low
+    - Face occluded or at extreme angle
+    - Face too small in the image
+    - Image is not a face (landscape, object, etc.)
+
+    **Code Reference:** `main.rs:87-89`
+    ```rust
+    let Some(t_emb) = target_embedding else {
+        return Json(CompareResponse { matches: vec![] });
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="No Matching Faces Found" icon="face-frown">
+    When faces are detected but none meet the similarity threshold:
+
+    ```json
+    {
+      "matches": []
+    }
+    ```
+
+    **Matching Logic:**
+    - Similarity threshold: **0.363** (cosine similarity)
+    - Only matches above threshold are returned
+    - Results sorted by probability (descending)
+
+    **Code Reference:** `main.rs:104`
+    ```rust
+    if score > 0.363 {
+        results.push(MatchResult { ... });
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Image Download/Decode Failure" icon="image-slash">
+    When person images fail to download or decode, they're silently skipped:
+
+    ```json
+    {
+      "matches": []  // or partial matches if some succeeded
+    }
+    ```
+
+    **Silent Failure Behavior:**
+    - Individual person image failures don't halt processing
+    - Other valid images are still processed
+    - No error details in response
+
+    **Code Reference:** `main.rs:93`
+    ```rust
+    if let Ok(p_img) = download_and_decode(&person.image_url).await {
+        // Process only if successful
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Detecting Empty Response Causes
+
+Since the API returns the same empty array for different failure modes, use these debugging strategies:
+
+<Tabs>
+  <Tab title="Isolated Testing">
+    Test components individually:
+
+    ```javascript
+    // Test 1: Verify target image loads
+    const testTarget = await client.compare(
+      'https://example.com/target.jpg',
+      [{ name: 'Test', image_url: 'https://example.com/known-good.jpg' }]
+    );
+    // If empty, target image is the issue
+
+    // Test 2: Verify person images load
+    const testPerson = await client.compare(
+      'https://example.com/known-good.jpg',
+      [{ name: 'Test', image_url: person.image_url }]
+    );
+    // If empty, person image is the issue
+
+    // Test 3: Use known matching pair
+    const testMatch = await client.compare(
+      'https://example.com/known-good.jpg',
+      [{ name: 'Same Person', image_url: 'https://example.com/known-good.jpg' }]
+    );
+    // Should return high probability match
+    ```
+  </Tab>
+
+  <Tab title="Image Validation">
+    Validate images before sending:
+
+    ```python
+    from PIL import Image
+    import requests
+    from io import BytesIO
+
+    def validate_image_url(url: str) -> bool:
+        """Check if URL points to valid, accessible image"""
+        try:
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+            img = Image.open(BytesIO(response.content))
+            
+            # Check minimum size
+            width, height = img.size
+            if width < 100 or height < 100:
+                print(f"Image too small: {width}x{height}")
+                return False
+            
+            # Check format
+            if img.format not in ['JPEG', 'PNG', 'BMP']:
+                print(f"Unsupported format: {img.format}")
+                return False
+            
+            return True
+        except Exception as e:
+            print(f"Image validation failed: {e}")
+            return False
+
+    # Use before API call
+    if validate_image_url(target_url):
+        result = client.compare(target_url, people)
+    ```
+  </Tab>
+
+  <Tab title="Server Logs">
+    Check server logs for error details:
+
+    ```bash
+    # The API may log errors that aren't exposed in responses
+    docker logs iris-api --tail 100 --follow
+    
+    # Look for patterns like:
+    # - "Invalid data URI"
+    # - "Empty image"
+    # - "Failed to decode image"
+    # - Connection timeouts
+    ```
+  </Tab>
+</Tabs>
+
+## Image Decode Errors
+
+Image processing failures occur silently but can be detected through careful testing.
+
+### Common Image Issues
+
+<CardGroup cols={2}>
+  <Card title="Invalid Data URI" icon="code">
+    Malformed base64 data URIs missing comma separator.
+    
+    **Error Location:** `main.rs:49`
+    ```rust
+    let comma = url.find(',').ok_or_else(
+        || anyhow!("Invalid data URI")
+    )?;
+    ```
+  </Card>
+
+  <Card title="Base64 Decode Failure" icon="binary">
+    Corrupted or invalid base64 encoding.
+    
+    **Error Location:** `main.rs:50`
+    ```rust
+    general_purpose::STANDARD.decode(&url[comma + 1..])?;
+    ```
+  </Card>
+
+  <Card title="Image Decode Failure" icon="file-image">
+    Invalid image data or unsupported format.
+    
+    **Error Location:** `main.rs:57`
+    ```rust
+    let img = imgcodecs::imdecode(&vector_uint8, imgcodecs::IMREAD_COLOR)?;
+    ```
+  </Card>
+
+  <Card title="Empty Image" icon="image-slash">
+    Image decoded but contains no pixel data.
+    
+    **Error Location:** `main.rs:58`
+    ```rust
+    if img.empty() { return Err(anyhow!("Empty image")); }
+    ```
+  </Card>
+</CardGroup>
+
+### Supported Image Formats
+
+The API uses OpenCV's `imdecode` function, which supports:
+
+- **JPEG** (.jpg, .jpeg)
+- **PNG** (.png)
+- **BMP** (.bmp)
+- **TIFF** (.tiff, .tif)
+- **WebP** (.webp)
+
+### Image URL Requirements
+
+<Tabs>
+  <Tab title="HTTP/HTTPS URLs">
+    ```json
+    {
+      "target_url": "https://example.com/photo.jpg",
+      "people": [
+        {
+          "name": "Person 1",
+          "image_url": "https://example.com/person1.jpg"
+        }
+      ]
+    }
+    ```
+
+    **Requirements:**
+    - Publicly accessible URLs
+    - Must respond within reasonable timeout
+    - Should return proper Content-Type headers
+    - No authentication required (API can't pass credentials)
+  </Tab>
+
+  <Tab title="Data URIs">
+    ```json
+    {
+      "target_url": "data:image/jpeg;base64,/9j/4AAQSkZJRg...",
+      "people": [
+        {
+          "name": "Person 1",
+          "image_url": "data:image/png;base64,iVBORw0KGgo..."
+        }
+      ]
+    }
+    ```
+
+    **Format:**
+    ```
+    data:[<mediatype>][;base64],<data>
+    ```
+
+    **Requirements:**
+    - Must include comma separator
+    - Data must be valid base64
+    - Media type is optional
+  </Tab>
+</Tabs>
+
+### Error Recovery Strategies
+
+<Steps>
+  <Step title="Validate Image URLs">
+    Test URLs independently before sending to API:
+    ```bash
+    curl -I https://example.com/photo.jpg
+    # Verify: HTTP 200, Content-Type: image/*, Content-Length > 0
+    ```
+  </Step>
+
+  <Step title="Use Image CDNs">
+    Host images on reliable CDN services (Cloudinary, imgix, AWS S3) to minimize download failures.
+  </Step>
+
+  <Step title="Implement Fallback Logic">
+    ```javascript
+    async function compareWithFallback(target, people) {
+      let result = await client.compare(target, people);
+      
+      if (result.matches.length === 0) {
+        // Try alternative image URLs if available
+        for (const person of people) {
+          if (person.fallback_image_url) {
+            person.image_url = person.fallback_image_url;
+          }
+        }
+        result = await client.compare(target, people);
+      }
+      
+      return result;
+    }
+    ```
+  </Step>
+
+  <Step title="Optimize Image Quality">
+    - Resize images to reasonable dimensions (800x800 max)
+    - Compress to reduce download time
+    - Ensure faces are clearly visible and well-lit
+  </Step>
+</Steps>
+
+## Debugging Checklist
+
+When troubleshooting API issues:
+
+<Checks>
+  - [ ] Verify API is running and accessible (`GET /health` returns "OK")
+  - [ ] Check request rate (must stay under 5 req/s per IP)
+  - [ ] Validate all image URLs return 200 and are accessible
+  - [ ] Test images independently to isolate failures
+  - [ ] Verify image formats are supported (JPEG, PNG, etc.)
+  - [ ] Ensure images contain visible, unobstructed faces
+  - [ ] Check for base64 encoding issues in data URIs
+  - [ ] Review server logs for detailed error messages
+  - [ ] Test with known-good images to verify API functionality
+  - [ ] Confirm network connectivity between client and API
+</Checks>
+
+## Error Response Examples
+
+<CodeGroup>
+```json Rate Limit (429)
+# HTTP Status: 429 Too Many Requests
+# Body: Empty
+
+# Detection in code:
+if (response.status === 429) {
+  console.log('Rate limited - slow down requests');
+}
+```
+
+```json Empty Matches (200)
+# HTTP Status: 200 OK
+{
+  "matches": []
+}
+
+# Possible causes:
+# 1. No face detected in target
+# 2. No matching faces found
+# 3. Image download/decode failed
+# 4. Similarity below threshold (0.363)
+```
+
+```json Successful Match (200)
+# HTTP Status: 200 OK
+{
+  "matches": [
+    {
+      "name": "John Doe",
+      "probability": 87.0
+    },
+    {
+      "name": "Jane Smith",
+      "probability": 42.0
+    }
+  ]
+}
+```
+</CodeGroup>
+
+## Getting Help
+
+<CardGroup cols={2}>
+  <Card title="Check Server Logs" icon="file-lines">
+    Review application logs for detailed error messages not exposed in API responses.
+  </Card>
+  <Card title="Test with Examples" icon="vial" href="/api/examples">
+    Use working examples from the integration guide to verify your setup.
+  </Card>
+  <Card title="Verify Rate Limits" icon="gauge-high" href="/api/stats">
+    Check `/stats` endpoint to monitor your request patterns.
+  </Card>
+  <Card title="Image Guidelines" icon="image" href="/api/compare">
+    Review image requirements and best practices in the API reference.
+  </Card>
+</CardGroup>

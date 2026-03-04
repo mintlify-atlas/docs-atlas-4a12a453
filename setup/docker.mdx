@@ -1,0 +1,771 @@
+---
+title: Docker Setup
+description: Deploy Iris face recognition API using Docker containers for simplified dependency management
+---
+
+## Overview
+
+Docker deployment provides a consistent, isolated environment for running Iris without manually installing Rust, OpenCV, or system dependencies. This guide explains the Dockerfile architecture and deployment strategies.
+
+<Info>
+  Docker is the **recommended deployment method** for production environments, ensuring reproducible builds across different systems.
+</Info>
+
+## Prerequisites
+
+<Steps>
+  <Step title="Install Docker">
+    Ensure Docker is installed on your system:
+    
+    <Tabs>
+      <Tab title="Linux">
+        ```bash
+        # Install using official script
+        curl -fsSL https://get.docker.com -o get-docker.sh
+        sudo sh get-docker.sh
+        
+        # Add user to docker group (optional, avoids sudo)
+        sudo usermod -aG docker $USER
+        newgrp docker
+        ```
+      </Tab>
+      
+      <Tab title="macOS">
+        Download and install [Docker Desktop for Mac](https://www.docker.com/products/docker-desktop/).
+        
+        Verify installation:
+        ```bash
+        docker --version
+        ```
+      </Tab>
+      
+      <Tab title="Windows">
+        Download and install [Docker Desktop for Windows](https://www.docker.com/products/docker-desktop/).
+        
+        Requires WSL2 backend for optimal performance.
+      </Tab>
+    </Tabs>
+  </Step>
+  
+  <Step title="Verify Docker installation">
+    ```bash
+    docker --version
+    docker run hello-world
+    ```
+    
+    Expected output:
+    ```
+    Docker version 24.0.0, build abc1234
+    Hello from Docker!
+    ```
+  </Step>
+</Steps>
+
+## Dockerfile Architecture
+
+Iris uses a single-stage Dockerfile based on the official Rust image with OpenCV dependencies:
+
+```dockerfile Dockerfile
+FROM rust:latest
+
+# Install system dependencies for OpenCV and Rust compilation
+RUN apt-get update && apt-get install -y \
+    clang \
+    llvm-dev \
+    libclang-dev \
+    pkg-config \
+    libopencv-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy dependency manifests first (Docker layer caching optimization)
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+
+# Build the application in release mode
+RUN cargo build --release
+
+# Download AI models using setup script
+COPY setup.sh ./setup.sh
+RUN chmod +x setup.sh && ./setup.sh
+
+# Expose API port
+EXPOSE 8080
+
+# Run the compiled binary
+CMD ["./target/release/iris"]
+```
+
+### Build Stages Explained
+
+<AccordionGroup>
+  <Accordion title="Base Image Selection" icon="box">
+    ```dockerfile
+    FROM rust:latest
+    ```
+    
+    Uses the official Rust Docker image based on Debian, providing:
+    - Rust toolchain (rustc, cargo)
+    - Standard Linux utilities
+    - Debian package manager (apt)
+    
+    <Tip>
+      For production, consider pinning to a specific version:
+      ```dockerfile
+      FROM rust:1.75-slim
+      ```
+    </Tip>
+  </Accordion>
+  
+  <Accordion title="System Dependencies" icon="download">
+    ```dockerfile
+    RUN apt-get update && apt-get install -y \
+        clang \
+        llvm-dev \
+        libclang-dev \
+        pkg-config \
+        libopencv-dev \
+        curl \
+        && rm -rf /var/lib/apt/lists/*
+    ```
+    
+    Installs OpenCV and build tools:
+    - **clang/llvm-dev/libclang-dev**: Required for opencv-rust bindings compilation
+    - **pkg-config**: Locates library paths during build
+    - **libopencv-dev**: OpenCV 4.x headers and libraries
+    - **curl**: Downloads ONNX models
+    
+    The cleanup (`rm -rf /var/lib/apt/lists/*`) reduces image size by ~40MB.
+  </Accordion>
+  
+  <Accordion title="Build Context" icon="folder">
+    ```dockerfile
+    WORKDIR /app
+    COPY Cargo.toml Cargo.lock ./
+    COPY src ./src
+    ```
+    
+    Sets `/app` as the working directory and copies source files.
+    
+    <Note>
+      Copying `Cargo.toml`/`Cargo.lock` before `src/` enables **Docker layer caching**. Dependencies are only rebuilt if these files change.
+    </Note>
+  </Accordion>
+  
+  <Accordion title="Compilation" icon="hammer">
+    ```dockerfile
+    RUN cargo build --release
+    ```
+    
+    Compiles Iris in release mode:
+    - Optimizations enabled (-O3 equivalent)
+    - Binary output: `/app/target/release/iris`
+    - Build time: ~8-12 minutes on first build
+    
+    Subsequent builds leverage Docker cache if dependencies unchanged.
+  </Accordion>
+  
+  <Accordion title="Model Download" icon="cloud-download">
+    ```dockerfile
+    COPY setup.sh ./setup.sh
+    RUN chmod +x setup.sh && ./setup.sh
+    ```
+    
+    Executes the setup script to download:
+    - `face_detection_yunet_2023mar.onnx` (~360KB)
+    - `face_recognition_sface_2021dec.onnx` (~41MB)
+    
+    Models are baked into the image at `/app/*.onnx`.
+  </Accordion>
+  
+  <Accordion title="Runtime Configuration" icon="play">
+    ```dockerfile
+    EXPOSE 8080
+    CMD ["./target/release/iris"]
+    ```
+    
+    - **EXPOSE 8080**: Documents the API port (doesn't publish it)
+    - **CMD**: Runs the compiled binary on container start
+    
+    The binary expects models in `/app` (WORKDIR), which matches the build paths.
+  </Accordion>
+</AccordionGroup>
+
+## Building the Image
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/your-username/iris.git
+    cd iris
+    ```
+  </Step>
+  
+  <Step title="Build the Docker image">
+    ```bash
+    docker build -t iris-api:latest .
+    ```
+    
+    <Info>
+      First build takes 10-15 minutes:
+      - Downloading Rust dependencies (~2-3 min)
+      - Compiling opencv-rust bindings (~5-7 min)
+      - Building application (~1-2 min)
+      - Downloading ONNX models (~30 sec)
+    </Info>
+    
+    Expected output:
+    ```
+    [+] Building 650.2s (12/12) FINISHED
+     => [internal] load build definition from Dockerfile
+     => [internal] load .dockerignore
+     => [1/7] FROM docker.io/library/rust:latest
+     => [2/7] RUN apt-get update && apt-get install...
+     => [3/7] WORKDIR /app
+     => [4/7] COPY Cargo.toml Cargo.lock ./
+     => [5/7] COPY src ./src
+     => [6/7] RUN cargo build --release
+     => [7/7] RUN chmod +x setup.sh && ./setup.sh
+     => exporting to image
+     => => naming to docker.io/library/iris-api:latest
+    ```
+  </Step>
+  
+  <Step title="Verify the image">
+    ```bash
+    docker images iris-api
+    ```
+    
+    Expected output:
+    ```
+    REPOSITORY   TAG       IMAGE ID       CREATED          SIZE
+    iris-api     latest    abc123def456   2 minutes ago    2.1GB
+    ```
+    
+    <Warning>
+      Image size is ~2.1GB due to Rust toolchain and OpenCV. See [Optimization](#image-size-optimization) for reduction strategies.
+    </Warning>
+  </Step>
+</Steps>
+
+## Running the Container
+
+### Basic Usage
+
+Run Iris in detached mode with port mapping:
+
+```bash
+docker run -d \
+  --name iris \
+  -p 8080:8080 \
+  iris-api:latest
+```
+
+<Accordion title="Command breakdown">
+  - **-d**: Detached mode (runs in background)
+  - **--name iris**: Container name for easy reference
+  - **-p 8080:8080**: Maps host port 8080 to container port 8080
+  - **iris-api:latest**: Image name and tag
+</Accordion>
+
+### Verify the Container
+
+Check container status:
+
+```bash
+docker ps
+```
+
+Expected output:
+```
+CONTAINER ID   IMAGE              COMMAND                  STATUS         PORTS
+abc123def456   iris-api:latest    "./target/release/iris"  Up 10 seconds  0.0.0.0:8080->8080/tcp
+```
+
+View logs:
+
+```bash
+docker logs iris
+```
+
+Expected output:
+```
+Initializing Iris Face AI...
+Iris API running on http://localhost:8080
+```
+
+### Test the API
+
+Verify the health endpoint:
+
+```bash
+curl http://localhost:8080/health
+```
+
+Expected response:
+```
+OK
+```
+
+## Advanced Configuration
+
+### Custom Port Mapping
+
+Run on a different host port:
+
+```bash
+docker run -d \
+  --name iris \
+  -p 3000:8080 \
+  iris-api:latest
+```
+
+Access at `http://localhost:3000`
+
+<Note>
+  The container still listens on 8080 internally. Only the host mapping changes.
+</Note>
+
+### Resource Limits
+
+Constrain CPU and memory usage:
+
+```bash
+docker run -d \
+  --name iris \
+  -p 8080:8080 \
+  --cpus="2.0" \
+  --memory="4g" \
+  iris-api:latest
+```
+
+<Accordion title="Recommended resource allocations">
+  - **Development:** 1 CPU, 2GB RAM
+  - **Production (low traffic):** 2 CPUs, 4GB RAM
+  - **Production (high traffic):** 4+ CPUs, 8GB+ RAM
+  
+  OpenCV operations are CPU-intensive. Allocate more cores for concurrent requests.
+</Accordion>
+
+### Environment Variables
+
+While Iris doesn't currently use environment variables, you can pass them for future extensibility:
+
+```bash
+docker run -d \
+  --name iris \
+  -p 8080:8080 \
+  -e LOG_LEVEL=debug \
+  -e MAX_IMAGE_SIZE=10MB \
+  iris-api:latest
+```
+
+### Volume Mounting
+
+Mount external model files (useful for model updates without rebuilding):
+
+```bash
+docker run -d \
+  --name iris \
+  -p 8080:8080 \
+  -v $(pwd)/models:/app/models \
+  iris-api:latest
+```
+
+<Warning>
+  Requires modifying `src/face.rs` to load models from `/app/models/` instead of `/app/`.
+</Warning>
+
+### Persistent Logs
+
+Redirect container logs to a file:
+
+```bash
+docker run -d \
+  --name iris \
+  -p 8080:8080 \
+  --log-driver json-file \
+  --log-opt max-size=10m \
+  --log-opt max-file=3 \
+  iris-api:latest
+```
+
+## Docker Compose
+
+For multi-container setups or simplified orchestration:
+
+```yaml docker-compose.yml
+version: '3.8'
+
+services:
+  iris:
+    build: .
+    container_name: iris-api
+    ports:
+      - "8080:8080"
+    environment:
+      - RUST_LOG=info
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+```
+
+Run with Docker Compose:
+
+```bash
+# Build and start
+docker-compose up -d
+
+# View logs
+docker-compose logs -f iris
+
+# Stop
+docker-compose down
+```
+
+<Accordion title="Adding a reverse proxy (nginx)">
+  ```yaml docker-compose.yml
+  version: '3.8'
+  
+  services:
+    iris:
+      build: .
+      container_name: iris-api
+      expose:
+        - "8080"
+      restart: unless-stopped
+    
+    nginx:
+      image: nginx:alpine
+      container_name: iris-proxy
+      ports:
+        - "80:80"
+        - "443:443"
+      volumes:
+        - ./nginx.conf:/etc/nginx/nginx.conf:ro
+        - ./ssl:/etc/nginx/ssl:ro
+      depends_on:
+        - iris
+      restart: unless-stopped
+  ```
+  
+  This setup:
+  - Exposes Iris only to the internal Docker network
+  - Routes external traffic through nginx
+  - Enables HTTPS termination
+</Accordion>
+
+## Image Size Optimization
+
+The default image is ~2.1GB. Reduce size using multi-stage builds:
+
+```dockerfile Dockerfile.optimized
+# Build stage
+FROM rust:latest AS builder
+
+RUN apt-get update && apt-get install -y \
+    clang llvm-dev libclang-dev pkg-config libopencv-dev curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN cargo build --release
+
+COPY setup.sh ./
+RUN chmod +x setup.sh && ./setup.sh
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y \
+    libopencv-core4.6 libopencv-imgcodecs4.6 libopencv-objdetect4.6 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=builder /app/target/release/iris ./
+COPY --from=builder /app/*.onnx ./
+
+EXPOSE 8080
+CMD ["./iris"]
+```
+
+Build the optimized image:
+
+```bash
+docker build -f Dockerfile.optimized -t iris-api:slim .
+```
+
+<Check>
+  Optimized image size: **~400MB** (80% reduction)
+</Check>
+
+<Note>
+  Only runtime OpenCV libraries are included, eliminating build tools and Rust toolchain.
+</Note>
+
+## Production Deployment
+
+### Health Checks
+
+Add Docker health checks for automatic restart on failure:
+
+```yaml docker-compose.yml
+services:
+  iris:
+    build: .
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+```
+
+### Security Hardening
+
+<Steps>
+  <Step title="Run as non-root user">
+    Modify Dockerfile:
+    
+    ```dockerfile
+    # Add after WORKDIR /app
+    RUN useradd -m -u 1000 iris && chown -R iris:iris /app
+    USER iris
+    ```
+  </Step>
+  
+  <Step title="Use read-only filesystem">
+    ```bash
+    docker run -d \
+      --name iris \
+      -p 8080:8080 \
+      --read-only \
+      --tmpfs /tmp \
+      iris-api:latest
+    ```
+    
+    <Note>
+      Iris is stateless and doesn't write to disk, making read-only mode safe.
+    </Note>
+  </Step>
+  
+  <Step title="Drop unnecessary capabilities">
+    ```bash
+    docker run -d \
+      --name iris \
+      -p 8080:8080 \
+      --cap-drop=ALL \
+      --cap-add=NET_BIND_SERVICE \
+      iris-api:latest
+    ```
+  </Step>
+</Steps>
+
+### Monitoring and Logging
+
+Integrate with logging systems:
+
+```bash
+# Forward logs to syslog
+docker run -d \
+  --name iris \
+  -p 8080:8080 \
+  --log-driver syslog \
+  --log-opt syslog-address=tcp://192.168.1.100:514 \
+  iris-api:latest
+```
+
+Or use Docker's built-in JSON logging with log rotation:
+
+```bash
+docker run -d \
+  --name iris \
+  -p 8080:8080 \
+  --log-opt max-size=10m \
+  --log-opt max-file=5 \
+  iris-api:latest
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Build fails: OpenCV not found">
+    **Symptoms:**
+    ```
+    error: failed to run custom build command for `opencv`
+    ```
+    
+    **Cause:** `libopencv-dev` installation failed in Dockerfile.
+    
+    **Solution:**
+    - Update package lists: Add `apt-get update` before install
+    - Use specific OpenCV version:
+      ```dockerfile
+      RUN apt-get install -y libopencv-dev=4.6.0+dfsg-12
+      ```
+    - Check Debian/Ubuntu compatibility with `rust:latest` base image
+  </Accordion>
+  
+  <Accordion title="Model download fails during build">
+    **Symptoms:**
+    ```
+    curl: (6) Could not resolve host: github.com
+    ```
+    
+    **Cause:** Network connectivity issues during `docker build`.
+    
+    **Solution:**
+    - Check Docker network settings
+    - Use `--network=host` flag:
+      ```bash
+      docker build --network=host -t iris-api .
+      ```
+    - Pre-download models and COPY instead:
+      ```dockerfile
+      COPY *.onnx ./
+      ```
+  </Accordion>
+  
+  <Accordion title="Container exits immediately">
+    **Symptoms:**
+    ```bash
+    docker ps  # Shows no running container
+    docker ps -a  # Shows Exited (1) status
+    ```
+    
+    **Solution:**
+    Check logs for errors:
+    ```bash
+    docker logs iris
+    ```
+    
+    Common causes:
+    - Missing ONNX models in image
+    - Port 8080 permission issues (use `--cap-add=NET_BIND_SERVICE`)
+    - Panic during initialization (check model paths)
+  </Accordion>
+  
+  <Accordion title="High memory usage">
+    **Symptoms:** Container uses >4GB RAM.
+    
+    **Cause:** Multiple concurrent face recognition requests.
+    
+    **Solution:**
+    - Set memory limits:
+      ```bash
+      docker run --memory="4g" --memory-swap="4g" iris-api
+      ```
+    - Reduce rate limit quota in `src/main.rs`
+    - Scale horizontally with multiple containers + load balancer
+  </Accordion>
+  
+  <Accordion title="Cannot access API from host">
+    **Symptoms:** `curl: (7) Failed to connect to localhost port 8080`
+    
+    **Solution:**
+    - Verify port mapping: `docker ps` (should show `0.0.0.0:8080->8080/tcp`)
+    - Check firewall rules:
+      ```bash
+      sudo ufw allow 8080/tcp
+      ```
+    - Test from inside container:
+      ```bash
+      docker exec iris curl http://localhost:8080/health
+      ```
+  </Accordion>
+</AccordionGroup>
+
+## Scaling with Docker
+
+### Horizontal Scaling
+
+Run multiple Iris instances behind a load balancer:
+
+```bash
+# Start 3 instances
+docker run -d --name iris-1 -p 8081:8080 iris-api:latest
+docker run -d --name iris-2 -p 8082:8080 iris-api:latest
+docker run -d --name iris-3 -p 8083:8080 iris-api:latest
+```
+
+Use nginx for load balancing:
+
+```nginx nginx.conf
+upstream iris_backend {
+    least_conn;
+    server localhost:8081;
+    server localhost:8082;
+    server localhost:8083;
+}
+
+server {
+    listen 80;
+    
+    location / {
+        proxy_pass http://iris_backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+### Docker Swarm / Kubernetes
+
+For orchestration at scale, see:
+- [Docker Swarm deployment guide](#) (coming soon)
+- [Kubernetes Helm chart](#) (coming soon)
+
+## Registry and Distribution
+
+### Push to Docker Hub
+
+```bash
+# Tag the image
+docker tag iris-api:latest yourusername/iris-api:latest
+docker tag iris-api:latest yourusername/iris-api:v0.1.0
+
+# Login to Docker Hub
+docker login
+
+# Push
+docker push yourusername/iris-api:latest
+docker push yourusername/iris-api:v0.1.0
+```
+
+### Pull and Run
+
+Others can now deploy Iris without building:
+
+```bash
+docker pull yourusername/iris-api:latest
+docker run -d -p 8080:8080 yourusername/iris-api:latest
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Reference" icon="code" href="/api/compare">
+    Integrate face comparison into your application
+  </Card>
+  <Card title="Local Installation" icon="download" href="/setup/installation">
+    Alternative non-Docker setup guide
+  </Card>
+  <Card title="Security Model" icon="shield-halved" href="/security/privacy-model">
+    Learn about privacy and security features
+  </Card>
+  <Card title="Architecture" icon="diagram-project" href="/concepts/architecture">
+    Understand how Iris works under the hood
+  </Card>
+</CardGroup>

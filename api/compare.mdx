@@ -1,0 +1,133 @@
+---
+title: 'Compare Faces'
+api: 'POST /compare'
+description: 'Compare a target face against multiple candidate faces and return matching results'
+---
+
+The `/compare` endpoint performs facial recognition by comparing a target face image against a list of candidate faces. It uses OpenCV's FaceRecognizerSF with cosine distance matching to identify matching faces.
+
+## Request
+
+### Body Parameters
+
+<ParamField body="target_url" type="string" required>
+  URL or data URI of the target face image to compare against. Supports:
+  - HTTP/HTTPS URLs (e.g., `https://example.com/image.jpg`)
+  - Data URIs with base64-encoded images (e.g., `data:image/jpeg;base64,...`)
+  
+  The image will be downloaded and decoded automatically. If the image is invalid or contains no detectable face, an empty matches array is returned.
+</ParamField>
+
+<ParamField body="people" type="array" required>
+  Array of candidate people to compare against the target face. Each person object contains:
+  
+  <Expandable title="Person Object">
+    <ParamField body="name" type="string" required>
+      Name identifier for this person. Returned in match results.
+    </ParamField>
+    
+    <ParamField body="image_url" type="string" required>
+      URL or data URI of the candidate's face image. Same format as `target_url`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Example Request
+
+```bash
+curl -X POST http://localhost:8080/compare \
+  -H "Content-Type: application/json" \
+  -d '{
+    "target_url": "https://example.com/target-face.jpg",
+    "people": [
+      {
+        "name": "John Doe",
+        "image_url": "https://example.com/john.jpg"
+      },
+      {
+        "name": "Jane Smith",
+        "image_url": "https://example.com/jane.jpg"
+      }
+    ]
+  }'
+```
+
+## Response
+
+Returns a JSON object containing an array of matching faces, sorted by probability in descending order.
+
+<ResponseField name="matches" type="array">
+  Array of matching faces that exceeded the similarity threshold (0.363). Only includes candidates with detectable faces that match the target.
+  
+  <Expandable title="MatchResult Object">
+    <ResponseField name="name" type="string">
+      Name of the matched person from the request.
+    </ResponseField>
+    
+    <ResponseField name="probability" type="number">
+      Match confidence as a percentage (0-100). Higher values indicate stronger matches. Calculated from cosine similarity score and rounded to nearest integer.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Success Response
+
+```json
+{
+  "matches": [
+    {
+      "name": "John Doe",
+      "probability": 87.0
+    },
+    {
+      "name": "Jane Smith",
+      "probability": 45.0
+    }
+  ]
+}
+```
+
+### No Matches Response
+
+```json
+{
+  "matches": []
+}
+```
+
+## Matching Algorithm
+
+The endpoint uses the following process:
+
+1. **Target Face Detection**: Downloads and decodes the target image, then extracts facial embeddings using OpenCV's FaceDetectorYN and FaceRecognizerSF
+2. **Candidate Comparison**: For each person in the `people` array:
+   - Downloads and decodes their image
+   - Extracts facial embeddings
+   - Computes cosine distance similarity with the target
+3. **Threshold Filtering**: Only includes matches with similarity score > **0.363**
+4. **Sorting**: Results are sorted by probability in descending order (highest matches first)
+
+## Error Handling
+
+The endpoint is designed to be resilient and returns partial results rather than errors:
+
+- **Invalid target image**: Returns empty `matches` array
+- **No face detected in target**: Returns empty `matches` array
+- **Invalid candidate image**: Skips that candidate, continues with others
+- **No face detected in candidate**: Skips that candidate, continues with others
+- **Network errors**: Skips failed downloads, continues with available images
+
+## Rate Limiting
+
+This endpoint is subject to rate limiting:
+- **5 requests per second** per IP address
+- **Burst capacity**: 10 requests
+- Returns `429 Too Many Requests` when limit exceeded
+
+## Notes
+
+- The matching threshold of **0.363** is tuned for facial recognition accuracy
+- Probability scores are normalized to 0-100 range and rounded
+- All image processing is performed server-side
+- Requests are tracked in the `/stats` endpoint metrics
+- The endpoint supports both HTTP URLs and base64 data URIs for maximum flexibility

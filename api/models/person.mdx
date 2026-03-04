@@ -1,0 +1,95 @@
+---
+title: Person
+description: Model representing an individual person with their face image
+---
+
+## Overview
+
+The `Person` model represents an individual person in the face recognition system. It contains a unique identifier (name) and a URL to their face image.
+
+## Rust Definition
+
+```rust
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Person {
+    pub name: String,
+    pub image_url: String,
+}
+```
+
+## TypeScript Definition
+
+```typescript
+interface Person {
+  name: string;
+  image_url: string;
+}
+```
+
+## Fields
+
+<ParamField path="name" type="string" required>
+  A unique identifier or name for the person. This value is used to identify the person in match results. It can be a full name, username, user ID, or any other unique identifier relevant to your application.
+</ParamField>
+
+<ParamField path="image_url" type="string" required>
+  A publicly accessible URL to an image containing the person's face. The image should clearly show the person's face for accurate recognition. Supported formats include JPEG, PNG, and other common image formats.
+</ParamField>
+
+## Example JSON
+
+```json
+{
+  "name": "Jane Smith",
+  "image_url": "https://example.com/images/jane-smith.jpg"
+}
+```
+
+## Array Example
+
+When used in a CompareRequest, multiple Person objects are provided:
+
+```json
+[
+  {
+    "name": "Alice Johnson",
+    "image_url": "https://storage.example.com/faces/alice.jpg"
+  },
+  {
+    "name": "Bob Williams",
+    "image_url": "https://storage.example.com/faces/bob.jpg"
+  },
+  {
+    "name": "Charlie Brown",
+    "image_url": "https://storage.example.com/faces/charlie.jpg"
+  }
+]
+```
+
+## Best Practices
+
+### Image Requirements
+
+- **Face Visibility**: Ensure the face is clearly visible and not obscured
+- **Image Quality**: Use high-resolution images for better accuracy
+- **Lighting**: Well-lit images produce more accurate results
+- **Frontal View**: Face-forward images work best, though slight angles are acceptable
+- **Single Face**: Images should contain only one face or have the target face prominent
+
+### Naming Conventions
+
+- Use consistent naming patterns across your application
+- Consider using unique identifiers (UUIDs, database IDs) for guaranteed uniqueness
+- Avoid special characters that might cause issues in your system
+
+### Image URL Requirements
+
+- URLs must be publicly accessible (or accessible to the API service)
+- Use HTTPS for security when possible
+- Ensure images are hosted on reliable infrastructure
+- Consider URL expiration times if using signed URLs
+
+## Related Models
+
+- [CompareRequest](/api/models/compare-request) - Uses an array of Person objects
+- [MatchResult](/api/models/match-result) - References the person's name in match results

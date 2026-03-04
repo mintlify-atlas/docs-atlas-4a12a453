@@ -1,0 +1,160 @@
+---
+title: 'Health Check'
+api: 'GET /health'
+description: 'Simple endpoint to verify API availability and service status'
+---
+
+The `/health` endpoint provides a basic health check to verify that the Iris API server is running and accepting requests. This is commonly used by load balancers, monitoring systems, and orchestration platforms.
+
+## Request
+
+No parameters required. Simply send a GET request to the endpoint.
+
+### Example Request
+
+```bash
+curl http://localhost:8080/health
+```
+
+### Example with Status Check
+
+```bash
+# Check health with HTTP status code
+curl -I http://localhost:8080/health
+```
+
+## Response
+
+Returns a simple `200 OK` status with the text response `"OK"`.
+
+### Success Response
+
+**Status Code**: `200 OK`
+
+**Body**:
+```text
+OK
+```
+
+### Response Headers
+
+```
+HTTP/1.1 200 OK
+content-type: text/plain; charset=utf-8
+content-length: 2
+```
+
+## Use Cases
+
+### Docker Health Checks
+
+```dockerfile
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:8080/health || exit 1
+```
+
+### Kubernetes Liveness Probe
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 3
+  periodSeconds: 10
+```
+
+### Kubernetes Readiness Probe
+
+```yaml
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 5
+```
+
+### Load Balancer Health Check
+
+```bash
+# AWS ALB Target Group health check configuration
+# Path: /health
+# Expected: 200 status code
+# Interval: 30 seconds
+# Timeout: 5 seconds
+```
+
+### Monitoring Script
+
+```bash
+#!/bin/bash
+RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health)
+if [ $RESPONSE -eq 200 ]; then
+  echo "API is healthy"
+  exit 0
+else
+  echo "API is unhealthy: HTTP $RESPONSE"
+  exit 1
+fi
+```
+
+## Rate Limiting
+
+The `/health` endpoint is subject to the same rate limiting as other endpoints:
+- **5 requests per second** per IP address
+- **Burst capacity**: 10 requests
+- Returns `429 Too Many Requests` when limit exceeded
+
+For high-frequency health checks, consider:
+- Adjusting check intervals to stay within rate limits
+- Using connection-level checks instead of HTTP requests
+- Implementing retry logic with exponential backoff
+
+## Behavior
+
+The health endpoint indicates that:
+
+- The server process is running
+- The HTTP server is accepting connections
+- The request routing is functional
+- CORS middleware is operational
+
+It does **not** verify:
+
+- Face recognition engine status
+- OpenCV model availability
+- File system access
+- External network connectivity
+
+This is a simple availability check. For deeper health verification, consider monitoring:
+- `/stats` endpoint for request metrics
+- `/compare` endpoint with test data
+- Server logs for errors
+
+## Performance
+
+The health endpoint is extremely lightweight:
+
+- **No I/O operations**: Returns static string
+- **No processing**: Direct response without computation
+- **Minimal memory**: No allocations
+- **Sub-millisecond response**: Typical response time < 1ms
+
+## CORS
+
+The endpoint supports CORS requests with:
+- **Allowed origins**: Any (`*`)
+- **Allowed methods**: GET, POST
+- **Allowed headers**: Content-Type
+
+This allows health checks from browser-based monitoring dashboards.
+
+## Notes
+
+- Returns plain text, not JSON
+- Always returns 200 if the server is running
+- Does not require authentication
+- Safe to call repeatedly
+- Recommended for automated monitoring
+- Does not increment the `/stats` request counters

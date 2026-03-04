@@ -1,0 +1,72 @@
+---
+title: CompareRequest
+description: Request model for face comparison operations
+---
+
+## Overview
+
+The `CompareRequest` model represents the input payload for the face comparison endpoint. It contains a target face image and a list of people to compare against.
+
+## Rust Definition
+
+```rust
+#[derive(Deserialize)]
+pub struct CompareRequest {
+    pub target_url: String,
+    pub people: Vec<Person>,
+}
+```
+
+## TypeScript Definition
+
+```typescript
+interface CompareRequest {
+  target_url: string;
+  people: Person[];
+}
+```
+
+## Fields
+
+<ParamField path="target_url" type="string" required>
+  The URL of the target face image to compare against the provided people. This should be a publicly accessible image URL containing a face.
+</ParamField>
+
+<ParamField path="people" type="Person[]" required>
+  An array of Person objects representing the individuals to compare against the target face. Each person includes a name and their image URL.
+</ParamField>
+
+## Example JSON
+
+```json
+{
+  "target_url": "https://example.com/images/target-face.jpg",
+  "people": [
+    {
+      "name": "John Doe",
+      "image_url": "https://example.com/images/john.jpg"
+    },
+    {
+      "name": "Jane Smith",
+      "image_url": "https://example.com/images/jane.jpg"
+    },
+    {
+      "name": "Bob Johnson",
+      "image_url": "https://example.com/images/bob.jpg"
+    }
+  ]
+}
+```
+
+## Usage
+
+This model is used as the request body for the `/compare` endpoint. The API will:
+1. Download and process the target face image
+2. Download and process each person's image
+3. Compare the target face against all provided people
+4. Return match results with probability scores
+
+## Related Models
+
+- [Person](/api/models/person) - Individual person model used in the people array
+- [CompareResponse](/api/models/compare-response) - Response model returned from the comparison

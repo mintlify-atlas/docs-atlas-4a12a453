@@ -1,0 +1,438 @@
+---
+title: Stateless Design
+description: Understanding Iris's zero-persistence architecture and privacy benefits
+icon: shield-check
+---
+
+## Overview
+
+Iris is built on a **stateless, RAM-only architecture** with a core principle:
+
+<Card title="Zero Persistence Philosophy" icon="ban">
+No databases. No file storage. No request logs. Every request is processed entirely in memory and immediately discarded.
+</Card>
+
+This design choice has profound implications for privacy, security, and scalability.
+
+## What Is Stateless?
+
+In a stateless system, each request is **completely independent**:
+
+<CardGroup cols={2}>
+  <Card title="No Session State" icon="xmark">
+    No authentication tokens, cookies, or user sessions
+  </Card>
+  <Card title="No Data Retention" icon="trash">
+    Images and embeddings are discarded after response
+  </Card>
+  <Card title="No History" icon="clock-rotate-left">
+    No logs of who compared which faces
+  </Card>
+  <Card title="No Database" icon="database">
+    No PostgreSQL, MongoDB, Redis, or any persistence layer
+  </Card>
+</CardGroup>
+
+## Architecture Analysis
+
+Let's examine the codebase to understand how statelessness is enforced.
+
+### Application State
+
+The only shared state in `main.rs:28-33`:
+
+```rust main.rs
+#[derive(Clone)]
+struct AppState {
+    engine: Arc<Mutex<FaceEngine>>,
+    limiter: SharedRateLimiter,
+    stats: RequestStats,
+}
+```
+
+<Accordion title="engine: Arc<Mutex<FaceEngine>>">
+Contains the **neural network models** (YuNet and SFace). These are static weights loaded from ONNX files at startup.
+
+**No user data** is stored here—only the trained model parameters that are identical for all requests.
+</Accordion>
+
+<Accordion title="limiter: SharedRateLimiter">
+Tracks request counts per IP address for rate limiting.
+
+This is **transient state** kept in RAM. If the server restarts, rate limit counters reset to zero. No persistence.
+</Accordion>
+
+<Accordion title="stats: RequestStats">
+Records aggregate statistics: total requests, requests per second/minute/hour.
+
+Again, **RAM-only**. Stats reset on server restart. No personally identifiable information (PII) is stored.
+</Accordion>
+
+### Request Processing Lifecycle
+
+Trace a single request through `main.rs:62-117`:
+
+<Steps>
+  <Step title="Request Arrives">
+    Client sends JSON with target URL and array of people to compare
+  </Step>
+  
+  <Step title="Images Downloaded to RAM">
+    ```rust main.rs
+    let target_img = match download_and_decode(&payload.target_url).await {
+        Ok(img) => img,
+        Err(_) => return Json(CompareResponse { matches: vec![] }),
+    };
+    ```
+    Images are decoded into OpenCV `Mat` objects in memory. No files written to disk.
+  </Step>
+  
+  <Step title="Face Detection & Recognition">
+    ```rust main.rs
+    if let Ok(Some(emb)) = get_embedding(&target_img, det, rec) {
+        target_embedding = Some(emb);
+    }
+    ```
+    Embeddings extracted and stored in local variables on the stack. No heap allocation beyond temporary Mats.
+  </Step>
+  
+  <Step title="Comparison & Response">
+    ```rust main.rs
+    results.sort_by(|a, b| b.probability.partial_cmp(&a.probability).unwrap());
+    Json(CompareResponse { matches: results })
+    ```
+    Results collected in a `Vec`, serialized to JSON, and sent to client.
+  </Step>
+  
+  <Step title="Memory Cleanup">
+    When the function returns, all local variables (`target_img`, `t_emb`, `results`) are **dropped** by Rust's ownership system.
+    
+    The memory is reclaimed immediately. No trace of the request remains.
+  </Step>
+</Steps>
+
+### No Logging
+
+Notice what's **absent** from the code:
+
+❌ No `log::info!()` or `println!()` statements logging request details  
+❌ No database inserts or file writes  
+❌ No telemetry or analytics collection  
+❌ No error reporting services (like Sentry) that might leak data
+
+The only output is the startup message (`main.rs:125`, `153`):
+
+```rust main.rs
+println!("Initializing Iris Face AI...");
+println!("Iris API running on http://localhost:{}", port);
+```
+
+## Privacy Benefits
+
+### 1. No Data Breach Risk
+
+<Info>
+You cannot leak data that you never store.
+</Info>
+
+If the server is compromised:
+- **No database** to dump
+- **No files** to exfiltrate
+- **No logs** to analyze
+
+The attack surface is limited to the running process's memory, which contains at most a few dozen active requests.
+
+### 2. GDPR/CCPA Compliance
+
+Under data protection laws:
+
+✅ **No personal data collection**: Images are not "collected," only transiently processed  
+✅ **No retention period**: Data is deleted within milliseconds  
+✅ **No right to deletion**: Nothing to delete—data never persists  
+✅ **No data portability**: Nothing to export
+
+<Warning>
+This doesn't mean you're automatically compliant! If **clients** store images or embeddings, they're responsible for GDPR obligations. Iris just makes it easier by not storing data server-side.
+</Warning>
+
+### 3. Anonymous Usage
+
+The API has no concept of "users":
+
+- No authentication required
+- No API keys (optional, but not in the base implementation)
+- No tracking of who submitted what
+
+Rate limiting by IP address (`main.rs:41`) is the only per-client state, and it's ephemeral.
+
+## Performance Benefits
+
+### 1. Horizontal Scalability
+
+Stateless services scale trivially:
+
+```
+[Load Balancer]
+      |
+      +--- [Iris Instance 1]
+      +--- [Iris Instance 2]
+      +--- [Iris Instance 3]
+```
+
+Each instance is **completely independent**. No shared database to coordinate, no session stickiness needed.
+
+<Tip>
+Deploy multiple Iris instances behind nginx or a cloud load balancer for instant scaling.
+</Tip>
+
+### 2. No Database Bottleneck
+
+Traditional face recognition systems:
+
+```
+Request → API → Database (store embedding) → Compare embeddings → Response
+                  ↓
+              I/O bottleneck
+```
+
+Iris:
+
+```
+Request → RAM processing → Response
+            ↓
+          Pure CPU
+```
+
+Database I/O is often the slowest part of web applications. Eliminating it drastically improves latency.
+
+### 3. Lower Infrastructure Costs
+
+**No database** means:
+- No PostgreSQL/MongoDB hosting fees
+- No Redis cache layer
+- No backup/restore infrastructure
+- No DBA overhead
+
+<CardGroup cols={2}>
+  <Card title="Traditional Stack" icon="dollar-sign">
+    API server + Database + Cache + Backups = $200+/month
+  </Card>
+  <Card title="Iris Stack" icon="dollar-sign">
+    Single API server = $20/month
+  </Card>
+</CardGroup>
+
+## Limitations & Trade-offs
+
+### 1. No Historical Analysis
+
+You cannot:
+
+❌ Track which faces are searched most often  
+❌ Build a "most wanted" list  
+❌ Analyze usage patterns over time  
+❌ Implement "recently compared" features
+
+If these are requirements, you need to add a persistence layer **outside** of Iris (e.g., in your client application).
+
+### 2. No Caching
+
+If the same face is compared multiple times:
+
+```
+Request 1: Download image A, extract embedding, compare
+Request 2: Download image A, extract embedding, compare  ← Redundant work
+```
+
+A stateful system could cache embeddings. Iris recomputes them every time.
+
+<Accordion title="Why Not Add a Cache?">
+Caching introduces state, which:
+- Increases memory usage
+- Complicates deployment (need cache invalidation strategy)
+- Adds privacy risk (cached data persists longer)
+
+For most workloads, the simplicity of statelessness outweighs caching benefits. If needed, add a reverse proxy cache (like Varnish) in front of Iris.
+</Accordion>
+
+### 3. No Persistent Rate Limiting
+
+Rate limits reset when the server restarts (`main.rs:127-130`):
+
+```rust main.rs
+let quota = Quota::per_second(NonZeroU32::new(5).unwrap())
+    .allow_burst(NonZeroU32::new(10).unwrap());
+let limiter: SharedRateLimiter = Arc::new(RateLimiter::keyed(quota));
+```
+
+An attacker could:
+1. Hit rate limit
+2. Wait for server restart (or crash it)
+3. Get fresh quota
+
+<Warning>
+For production deployments, implement rate limiting at the infrastructure level (nginx, API gateway) with persistent storage.
+</Warning>
+
+## Statistics Module Analysis
+
+The `stats.rs` module appears to contradict statelessness—let's examine it.
+
+### What's Stored?
+
+```rust stats.rs
+#[derive(Clone)]
+pub struct RequestStats {
+    total: Arc<AtomicU64>,
+    timestamps: Arc<Mutex<VecDeque<Instant>>>,
+}
+```
+
+- **total**: Atomic counter of all requests since startup
+- **timestamps**: Queue of request times for the last hour
+
+### Is This "State"?
+
+Yes, but it's **aggregate, anonymous state**:
+
+✅ No PII (personally identifiable information)  
+✅ No request contents  
+✅ No IP addresses  
+✅ No images or embeddings
+
+Just counters: "5 requests in the last second."
+
+### Memory Management
+
+Old timestamps are pruned (`stats.rs:35-39`):
+
+```rust stats.rs
+// Keep at most 1 hour of history
+let cutoff = now - Duration::from_secs(3600);
+while ts.front().map_or(false, |t| *t < cutoff) {
+    ts.pop_front();
+}
+```
+
+Memory usage is **bounded**: ~1 hour × 5 req/sec = 18,000 timestamps = ~144 KB.
+
+This is acceptable overhead for operational monitoring.
+
+## Deployment Considerations
+
+### Kubernetes/Docker
+
+Stateless design makes containerization ideal:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iris
+spec:
+  replicas: 3  # Scale to 3 instances
+  template:
+    spec:
+      containers:
+      - name: iris
+        image: iris-api:latest
+        ports:
+        - containerPort: 8080
+```
+
+No volume mounts needed. No init containers. Just run the binary.
+
+### Crash Recovery
+
+If the process crashes:
+
+1. **In-flight requests** are lost (clients see connection errors)
+2. **No data corruption** (nothing to corrupt)
+3. **Restart is instant** (no database recovery needed)
+
+<Tip>
+Use a process manager (systemd, supervisord) to auto-restart crashed instances.
+</Tip>
+
+### Backup Strategy
+
+**There's nothing to back up.**
+
+The only files needed are:
+- The compiled binary
+- ONNX model files
+
+Both are **code artifacts**, not data. Version control them and deploy from CI/CD.
+
+## Comparing Architectures
+
+### Stateful Face Recognition API
+
+```
+┌─────────────┐
+│   Client    │
+└──────┬──────┘
+       │ POST /identify {image}
+       ↓
+┌─────────────┐
+│  API Server │
+└──────┬──────┘
+       │ 1. Save image to S3
+       │ 2. Extract embedding
+       │ 3. Store in PostgreSQL
+       │ 4. Query similar embeddings
+       ↓
+┌─────────────┐
+│  Database   │  ← Single point of failure
+└─────────────┘
+```
+
+### Iris (Stateless)
+
+```
+┌─────────────┐
+│   Client    │
+└──────┬──────┘
+       │ POST /compare {target_url, people[]}
+       ↓
+┌─────────────┐
+│  Iris API   │  ← Self-contained
+│  (RAM only) │
+└─────────────┘
+```
+
+## When to Add State
+
+You might need persistence if:
+
+🔍 **Building a search engine**: Need to index millions of faces  
+👤 **User accounts**: Require login and personalization  
+📊 **Analytics**: Must track usage patterns for billing  
+🔐 **Audit logs**: Legal requirement to log access
+
+<Info>
+In these cases, add state **outside** Iris:
+
+- Store embeddings in a **vector database** (Pinecone, Milvus, Qdrant)
+- Log requests in a **separate service** (Elasticsearch, Splunk)
+- Keep Iris itself stateless as the compute layer
+</Info>
+
+## Conclusion
+
+Iris's stateless design is a **deliberate architectural choice** that prioritizes:
+
+1. **Privacy**: No data retention = no data breach
+2. **Simplicity**: No database = easier operations
+3. **Scalability**: Stateless services scale effortlessly
+4. **Performance**: RAM-only processing is fast
+
+The trade-off is losing persistence features, but for face recognition APIs, this is often the right choice.
+
+<Tip>
+If you need both statelessness (for privacy) and persistence (for search), use a **hybrid architecture**:
+
+- Iris handles real-time comparisons (stateless)
+- A separate indexing service stores embeddings (stateful)
+- Clients choose which to use based on their needs
+</Tip>

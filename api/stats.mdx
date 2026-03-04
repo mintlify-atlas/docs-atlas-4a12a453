@@ -1,0 +1,122 @@
+---
+title: 'API Statistics'
+api: 'GET /stats'
+description: 'Retrieve real-time API usage statistics and request metrics'
+---
+
+The `/stats` endpoint provides real-time metrics about API usage, including total requests and time-windowed request counts. This is useful for monitoring API activity and usage patterns.
+
+## Request
+
+No parameters required. Simply send a GET request to the endpoint.
+
+### Example Request
+
+```bash
+curl http://localhost:8080/stats
+```
+
+## Response
+
+Returns a JSON object containing comprehensive request statistics.
+
+<ResponseField name="total_requests" type="number">
+  Total number of `/compare` requests processed since the API started. This counter persists for the lifetime of the server process and increments with each compare operation.
+</ResponseField>
+
+<ResponseField name="requests_last_second" type="number">
+  Number of requests received in the last 1 second. Useful for monitoring real-time request rate and detecting traffic spikes.
+</ResponseField>
+
+<ResponseField name="requests_last_minute" type="number">
+  Number of requests received in the last 60 seconds. Provides insight into recent API activity and short-term usage trends.
+</ResponseField>
+
+<ResponseField name="requests_last_hour" type="number">
+  Number of requests received in the last 3600 seconds (1 hour). Useful for understanding hourly usage patterns and capacity planning.
+</ResponseField>
+
+### Example Response
+
+```json
+{
+  "total_requests": 15847,
+  "requests_last_second": 3,
+  "requests_last_minute": 142,
+  "requests_last_hour": 8234
+}
+```
+
+## Metrics Details
+
+### Tracking Mechanism
+
+The statistics system tracks requests using:
+
+- **Atomic counter**: For `total_requests`, providing thread-safe counting without locks
+- **Time-series buffer**: Maintains timestamps of recent requests for windowed calculations
+- **Automatic cleanup**: Old timestamps beyond 1 hour are automatically removed to prevent memory growth
+
+### What Gets Counted
+
+Only `/compare` endpoint requests are counted in these statistics. The `/stats` and `/health` endpoints do not increment counters.
+
+### Time Windows
+
+All time window calculations are performed in real-time:
+
+- **Last second**: Includes requests from now to 1 second ago
+- **Last minute**: Includes requests from now to 60 seconds ago
+- **Last hour**: Includes requests from now to 3600 seconds ago
+
+Timestamps are precise to the microsecond level using Rust's `Instant` type.
+
+## Use Cases
+
+### Monitoring
+
+```bash
+# Monitor real-time request rate
+watch -n 1 'curl -s http://localhost:8080/stats | jq .requests_last_second'
+```
+
+### Health Checks
+
+Verify the API is processing requests:
+
+```bash
+curl http://localhost:8080/stats | jq '.total_requests'
+```
+
+### Load Testing
+
+Track performance during load tests:
+
+```bash
+# Check requests per second capacity
+curl http://localhost:8080/stats | jq '{rps: .requests_last_second, rpm: .requests_last_minute}'
+```
+
+## Rate Limiting
+
+The `/stats` endpoint is subject to the same rate limiting as other endpoints:
+- **5 requests per second** per IP address
+- **Burst capacity**: 10 requests
+- Returns `429 Too Many Requests` when limit exceeded
+
+## Performance
+
+The statistics endpoint is designed for minimal overhead:
+
+- **O(1) complexity** for total requests (atomic read)
+- **O(n) complexity** for windowed counts, where n = requests in last hour
+- **Non-blocking**: Uses async Mutex for concurrent access
+- **Memory bounded**: Automatically purges timestamps older than 1 hour
+
+## Notes
+
+- Statistics reset when the server restarts
+- All metrics are per-server instance (not aggregated across deployments)
+- Time windows are rolling (continuously updated, not bucketed)
+- The endpoint returns immediately with current snapshot values
+- Useful for debugging rate limiting behavior and traffic patterns

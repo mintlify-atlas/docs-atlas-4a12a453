@@ -1,0 +1,142 @@
+---
+title: MatchResult
+description: Model representing a face comparison match with probability score
+---
+
+## Overview
+
+The `MatchResult` model represents an individual match result from a face comparison operation. It contains the person's name and a probability score indicating how closely their face matches the target face.
+
+## Rust Definition
+
+```rust
+#[derive(Serialize)]
+pub struct MatchResult {
+    pub name: String,
+    pub probability: f64,
+}
+```
+
+## TypeScript Definition
+
+```typescript
+interface MatchResult {
+  name: string;
+  probability: number;
+}
+```
+
+## Fields
+
+<ResponseField name="name" type="string" required>
+  The name of the person from the original comparison request. This corresponds to the `name` field in the Person object that was compared.
+</ResponseField>
+
+<ResponseField name="probability" type="number" required>
+  A floating-point value between 0.0 and 1.0 representing the probability that this person matches the target face. Higher values indicate stronger matches. A value of 1.0 would represent a perfect match, while 0.0 indicates no similarity.
+</ResponseField>
+
+## Example JSON
+
+```json
+{
+  "name": "Jane Smith",
+  "probability": 0.9823
+}
+```
+
+## Array Example
+
+Match results are typically returned as an array in CompareResponse:
+
+```json
+[
+  {
+    "name": "Jane Smith",
+    "probability": 0.9823
+  },
+  {
+    "name": "Alice Johnson",
+    "probability": 0.7456
+  },
+  {
+    "name": "Bob Williams",
+    "probability": 0.3219
+  },
+  {
+    "name": "Charlie Brown",
+    "probability": 0.1847
+  }
+]
+```
+
+## Understanding Probability Scores
+
+### Score Ranges
+
+The probability field represents the confidence level of the match:
+
+| Range | Confidence | Interpretation |
+|-------|-----------|----------------|
+| 0.9 - 1.0 | Very High | Strong match - very likely the same person |
+| 0.7 - 0.9 | High | Good match - likely the same person |
+| 0.5 - 0.7 | Moderate | Some similarity - uncertain match |
+| 0.3 - 0.5 | Low | Weak similarity - probably different people |
+| 0.0 - 0.3 | Very Low | Little to no similarity - likely different people |
+
+### Factors Affecting Probability
+
+Several factors can influence the probability score:
+
+- **Image Quality**: Higher resolution and clearer images produce more accurate scores
+- **Lighting Conditions**: Consistent lighting between target and comparison images improves accuracy
+- **Face Angle**: Frontal faces are easier to match than profile or angled shots
+- **Age Difference**: Significant time differences between photos may lower probability scores
+- **Facial Expressions**: Neutral expressions typically match better than extreme expressions
+- **Obstructions**: Glasses, masks, or other face coverings can affect matching accuracy
+
+### Recommended Thresholds
+
+For different use cases, consider these threshold recommendations:
+
+- **High Security Applications** (e.g., access control): Use a threshold of 0.85 or higher
+- **Standard Identification** (e.g., photo tagging): Use a threshold of 0.70 to 0.80
+- **Similarity Suggestions** (e.g., "people you might know"): Use a threshold of 0.50 to 0.70
+- **Research/Analytics**: Adjust based on your specific accuracy requirements
+
+## Usage Example
+
+Processing match results in your application:
+
+```typescript
+const response = await fetch('/compare', {
+  method: 'POST',
+  body: JSON.stringify(compareRequest)
+});
+
+const data: CompareResponse = await response.json();
+
+// Find the best match
+const bestMatch = data.matches.reduce((prev, current) => 
+  current.probability > prev.probability ? current : prev
+);
+
+// Filter high confidence matches (threshold: 0.7)
+const highConfidenceMatches = data.matches.filter(
+  match => match.probability >= 0.7
+);
+
+if (bestMatch.probability >= 0.85) {
+  console.log(`High confidence match found: ${bestMatch.name}`);
+} else if (bestMatch.probability >= 0.7) {
+  console.log(`Probable match: ${bestMatch.name}`);
+} else {
+  console.log('No confident matches found');
+}
+```
+
+## Related Models
+
+- [CompareResponse](/api/models/compare-response) - Contains an array of MatchResult objects
+- [Person](/api/models/person) - The source person model that generated this match result
+- [CompareRequest](/api/models/compare-request) - The request that initiates the comparison
