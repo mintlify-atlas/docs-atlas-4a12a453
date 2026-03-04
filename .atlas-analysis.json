@@ -1,0 +1,98 @@
+{
+  "projectType": "api-service",
+  "projectName": "Iris",
+  "projectDescription": "High-performance face recognition REST API for medical patient identification built in Rust",
+  "theme": "aspen",
+  "primaryColor": "#4A90E2",
+  "lightColor": "#7FB3E8",
+  "darkColor": "#2E5A8C",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Setup",
+            "pages": [
+              "setup/prerequisites",
+              "setup/installation",
+              "setup/docker"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/face-detection",
+              "concepts/face-recognition",
+              "concepts/stateless-design"
+            ]
+          },
+          {
+            "group": "Security & Privacy",
+            "pages": [
+              "security/privacy-model",
+              "security/rate-limiting",
+              "security/cors"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/compare",
+              "api/stats",
+              "api/health"
+            ]
+          },
+          {
+            "group": "Models",
+            "pages": [
+              "api/models/compare-request",
+              "api/models/compare-response",
+              "api/models/person",
+              "api/models/match-result"
+            ]
+          },
+          {
+            "group": "Integration",
+            "pages": [
+              "api/authentication",
+              "api/error-handling",
+              "api/examples"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Stateless face recognition with zero persistence",
+    "Sub-100ms inference using YuNet and SFace ONNX models",
+    "Built-in rate limiting (5 req/sec per IP)",
+    "CORS-enabled REST API for hospital IT systems",
+    "Base64 and URL image input support",
+    "Real-time similarity scoring with configurable thresholds",
+    "Request statistics and health monitoring"
+  ],
+  "publicApiSurface": [
+    "POST /compare - Compare target face against database",
+    "GET /stats - Retrieve API usage statistics",
+    "GET /health - Health check endpoint",
+    "CompareRequest - Request payload structure",
+    "CompareResponse - Response with match results",
+    "Person - Database person structure",
+    "MatchResult - Individual match result with probability"
+  ]
+}
